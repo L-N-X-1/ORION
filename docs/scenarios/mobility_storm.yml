@@ -1,0 +1,9 @@
+# AURA-NET Scenario: mobility_storm
+# Ticket: AN-TST-001
+name: mobility_storm
+fault_mechanism: TODO
+agents_exercised: []
+success_criteria:
+  mttr_minutes: 5
+  automation_rate: 0.70
+steps: []

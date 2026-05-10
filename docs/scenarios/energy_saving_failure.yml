@@ -1,0 +1,9 @@
+# AURA-NET Scenario: energy_saving_failure
+# Ticket: AN-TST-001
+name: energy_saving_failure
+fault_mechanism: TODO
+agents_exercised: []
+success_criteria:
+  mttr_minutes: 5
+  automation_rate: 0.70
+steps: []

@@ -1,0 +1,131 @@
+version: "3.9"
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks: [aura-net]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on: [zookeeper]
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    networks: [aura-net]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks: [aura-net]
+
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: aura-net
+      DOCKER_INFLUXDB_INIT_BUCKET: aura_net
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - ./data/timeseries/influxdb/init.sh:/docker-entrypoint-initdb.d/init.sh
+    networks: [aura-net]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aura_net
+      POSTGRES_USER: aura
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/timeseries/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks: [aura-net]
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./ui/dashboard/grafana/provisioning:/etc/grafana/provisioning
+    networks: [aura-net]
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks: [aura-net]
+
+  # ── App Services ────────────────────────────────────────────────
+  digital-twin:
+    build: ./services/digital-twin
+    ports:
+      - "8001:8001"
+    env_file: .env
+    depends_on: [kafka, influxdb]
+    networks: [aura-net]
+
+  collector:
+    build: ./services/collector
+    ports:
+      - "8002:8002"
+    env_file: .env
+    depends_on: [kafka, influxdb]
+    networks: [aura-net]
+
+  actuator:
+    build: ./services/actuator
+    ports:
+      - "8003:8003"
+    env_file: .env
+    depends_on: [digital-twin, redis]
+    networks: [aura-net]
+
+  api-gateway:
+    build: ./services/api-gateway
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on: [digital-twin, collector, actuator]
+    networks: [aura-net]
+
+  ai-agent:
+    build: ./services/ai-agent
+    env_file: .env
+    depends_on: [api-gateway, kafka, redis]
+    networks: [aura-net]
+
+  nginx:
+    build: ./ui/nginx
+    ports:
+      - "80:80"
+    depends_on: [api-gateway, grafana]
+    networks: [aura-net]
+
+networks:
+  aura-net:
+    driver: bridge
+
+volumes:
+  influxdb_data:
+  postgres_data:
+  grafana_data:
+  redis_data:

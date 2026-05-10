@@ -1,0 +1,9 @@
+fastapi==0.111.0
+uvicorn==0.29.0
+simpy==4.1.1
+influxdb-client==1.43.0
+aiokafka==0.10.0
+pydantic==2.7.1
+numpy==1.26.4
+pandas==2.2.2
+python-dotenv==1.0.1
