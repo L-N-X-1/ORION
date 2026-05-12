@@ -7,19 +7,33 @@ services:
     image: confluentinc/cp-zookeeper:7.6.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
-    networks: [aura-net]
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [aura-net-lab]
 
   kafka:
     image: confluentinc/cp-kafka:7.6.0
-    depends_on: [zookeeper]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     ports:
       - "9092:9092"
-    networks: [aura-net]
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks: [aura-net-lab]
 
   redis:
     image: redis:7-alpine
@@ -27,7 +41,12 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    networks: [aura-net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [aura-net-lab]
 
   influxdb:
     image: influxdb:2.7
@@ -37,23 +56,33 @@ services:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
       DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD}
-      DOCKER_INFLUXDB_INIT_ORG: aura-net
-      DOCKER_INFLUXDB_INIT_BUCKET: aura_net
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
     volumes:
       - influxdb_data:/var/lib/influxdb2
-      - ./data/timeseries/influxdb/init.sh:/docker-entrypoint-initdb.d/init.sh
-    networks: [aura-net]
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [aura-net-lab]
 
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: aura_net
-      POSTGRES_USER: aura
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./data/timeseries/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-    networks: [aura-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [aura-net-lab]
 
   grafana:
     image: grafana/grafana:10.4.0
@@ -61,10 +90,14 @@ services:
       - "3001:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./ui/dashboard/grafana/provisioning:/etc/grafana/provisioning
-    networks: [aura-net]
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    networks: [aura-net-lab]
 
   prometheus:
     image: prom/prometheus:v2.51.0
@@ -72,7 +105,7 @@ services:
       - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
-    networks: [aura-net]
+    networks: [aura-net-lab]
 
   # ── App Services ────────────────────────────────────────────────
   digital-twin:
@@ -80,48 +113,78 @@ services:
     ports:
       - "8001:8001"
     env_file: .env
-    depends_on: [kafka, influxdb]
-    networks: [aura-net]
+    volumes:
+      - ./data/csv:/data/telecom
+    depends_on:
+      kafka:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [aura-net-lab]
 
   collector:
     build: ./services/collector
     ports:
       - "8002:8002"
     env_file: .env
-    depends_on: [kafka, influxdb]
-    networks: [aura-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    networks: [aura-net-lab]
 
   actuator:
     build: ./services/actuator
     ports:
       - "8003:8003"
     env_file: .env
-    depends_on: [digital-twin, redis]
-    networks: [aura-net]
+    depends_on:
+      digital-twin:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [aura-net-lab]
 
   api-gateway:
     build: ./services/api-gateway
     ports:
       - "8000:8000"
     env_file: .env
-    depends_on: [digital-twin, collector, actuator]
-    networks: [aura-net]
+    depends_on:
+      digital-twin:
+        condition: service_healthy
+    networks: [aura-net-lab]
 
   ai-agent:
     build: ./services/ai-agent
     env_file: .env
-    depends_on: [api-gateway, kafka, redis]
-    networks: [aura-net]
+    depends_on:
+      api-gateway:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [aura-net-lab]
 
   nginx:
     build: ./ui/nginx
     ports:
       - "80:80"
-    depends_on: [api-gateway, grafana]
-    networks: [aura-net]
+    depends_on:
+      - api-gateway
+      - grafana
+    networks: [aura-net-lab]
 
 networks:
-  aura-net:
+  aura-net-lab:
     driver: bridge
 
 volumes:

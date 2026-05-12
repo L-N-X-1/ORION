@@ -28,17 +28,16 @@ from fault_injector import FaultInjector
 from whatif_runner import WhatIfRunner
 
 # ── Config ──────────────────────────────────────────────────────────
-TICK_INTERVAL_S  = int(os.getenv("TICK_INTERVAL_S", "5"))
-DATASET_CSV_PATH = os.getenv("DATASET_CSV_PATH", "/data/telecom.csv")
-INFLUXDB_URL     = os.getenv("INFLUXDB_URL", "")
-INFLUXDB_TOKEN   = os.getenv("INFLUXDB_TOKEN", "")
-INFLUXDB_ORG     = os.getenv("INFLUXDB_ORG", "aura-net")
-INFLUXDB_BUCKET  = os.getenv("INFLUXDB_BUCKET", "aura_net")
-KAFKA_BROKERS    = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "")
+TICK_INTERVAL_S = int(os.getenv("TICK_INTERVAL_S", "5"))
+INFLUXDB_URL    = os.getenv("INFLUXDB_URL", "")
+INFLUXDB_TOKEN  = os.getenv("INFLUXDB_TOKEN", "")
+INFLUXDB_ORG    = os.getenv("INFLUXDB_ORG", "aura-net")
+INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "aura_net")
+KAFKA_BROKERS   = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "")
 
 # ── Globals ─────────────────────────────────────────────────────────
 state    = WorldState()
-dataset  = DatasetLoader(csv_path=DATASET_CSV_PATH)
+dataset  = DatasetLoader()          # reads DATASET_DIR + DATASET_SOURCES from env
 synth    = KpiSynthesizer()
 mobility = MobilityProcess()
 events   = EventGenerator()
@@ -51,7 +50,7 @@ _sim_running  = True
 _influx_write = None
 if INFLUXDB_URL and INFLUXDB_TOKEN:
     try:
-        from influxdb_client import InfluxDBClient, Point, WritePrecision
+        from influxdb_client import InfluxDBClient
         from influxdb_client.client.write_api import SYNCHRONOUS
         _influx_client = InfluxDBClient(
             url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG
@@ -66,11 +65,11 @@ def _write_to_influx(kpis: list[dict]) -> None:
     if not _influx_write:
         return
     try:
-        from influxdb_client import Point, WritePrecision
+        from influxdb_client import Point
         points = []
         for k in kpis:
             p = (Point("cell_kpi")
-                 .tag("cell_id", k["cell_id"])
+                 .tag("cell_id",     k["cell_id"])
                  .tag("energy_mode", k["energy_mode"])
                  .field("prb_util",        k["prb_util"])
                  .field("throughput_mbps", k["throughput_mbps"])
@@ -98,8 +97,8 @@ def _simulation_loop() -> None:
     def tick(env):
         global _tick_counter
         while _sim_running:
-            tick_no  = _tick_counter
-            is_peak  = dataset.is_peak_hour(tick_no)
+            tick_no = _tick_counter
+            is_peak = dataset.is_peak_hour(tick_no)
 
             # 1. Update cell loads from dataset
             for cid, cell in state.cells.items():
@@ -136,19 +135,31 @@ _sim_thread.start()
 
 # ── FastAPI app ──────────────────────────────────────────────────────
 app = FastAPI(title="AURA-NET Digital Twin", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ── Health ────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
+    """
+    Returns service health plus dataset source info per cell.
+    Useful to confirm which cells are using real CSV data vs synthetic fallback.
+    """
     return {
-        "status":     "ok",
-        "service":    "digital-twin",
-        "sim_time_s": state.sim_time_s,
-        "tick":       _tick_counter,
-        "cells":      len(state.cells),
+        "status":          "ok",
+        "service":         "digital-twin",
+        "sim_time_s":      state.sim_time_s,
+        "tick":            _tick_counter,
+        "cells":           len(state.cells),
+        "tick_interval_s": TICK_INTERVAL_S,
+        "influxdb":        "connected" if _influx_write else "not connected",
+        "dataset_dir":     os.getenv("DATASET_DIR", "/data/telecom"),
+        "dataset_sources": dataset.list_sources(),
     }
 
 
@@ -163,7 +174,6 @@ def get_metrics(
         if cell_id not in state.cells:
             raise HTTPException(404, f"Cell {cell_id} not found")
         return {"cell_id": cell_id, "kpis": state.get_kpi_history(cell_id, last_n)}
-
     return {"kpis": state.get_all_latest_kpis()}
 
 
@@ -186,8 +196,9 @@ def get_events(
 
 # ── What-if simulation ────────────────────────────────────────────────
 class WhatIfRequest(BaseModel):
-    action_plan:    dict
-    horizon_ticks:  int = 120
+    action_plan:   dict
+    horizon_ticks: int = 120
+
 
 @app.post("/whatif/run")
 def run_whatif(req: WhatIfRequest):
@@ -197,25 +208,31 @@ def run_whatif(req: WhatIfRequest):
 
 # ── Actions ───────────────────────────────────────────────────────────
 class SlicePolicyRequest(BaseModel):
-    slice_id:    str
-    min_bw_pct:  float | None = None
-    max_bw_pct:  float | None = None
-    priority:    int   | None = None
+    slice_id:   str
+    min_bw_pct: float | None = None
+    max_bw_pct: float | None = None
+    priority:   int   | None = None
+
 
 @app.post("/actions/apply_slice_policy")
 def apply_slice_policy(req: SlicePolicyRequest):
     if req.slice_id not in state.slices:
         raise HTTPException(404, f"Slice {req.slice_id} not found")
     sl = state.slices[req.slice_id]
-    if req.min_bw_pct is not None: sl.min_bw_pct = req.min_bw_pct
-    if req.max_bw_pct is not None: sl.max_bw_pct = req.max_bw_pct
-    if req.priority   is not None: sl.priority   = req.priority
+    if req.min_bw_pct is not None:
+        sl.min_bw_pct = req.min_bw_pct
+    if req.max_bw_pct is not None:
+        sl.max_bw_pct = req.max_bw_pct
+    if req.priority is not None:
+        sl.priority = req.priority
     change_id = f"CHG-{uuid.uuid4().hex[:6].upper()}"
     state.change_records[change_id] = {
-        "type": "slice_policy", "slice_id": req.slice_id,
-        "params": req.dict(), "sim_time_s": state.sim_time_s
+        "type":       "slice_policy",
+        "slice_id":   req.slice_id,
+        "params":     req.model_dump(),
+        "sim_time_s": state.sim_time_s,
     }
-    return {"change_id": change_id, "applied": req.dict()}
+    return {"change_id": change_id, "applied": req.model_dump()}
 
 
 class HandoverRequest(BaseModel):
@@ -223,24 +240,30 @@ class HandoverRequest(BaseModel):
     a3_offset: float | None = None
     ttt_ms:    float | None = None
 
+
 @app.post("/actions/tune_handover")
 def tune_handover(req: HandoverRequest):
     if req.cell_id not in state.cells:
         raise HTTPException(404, f"Cell {req.cell_id} not found")
     cell = state.cells[req.cell_id]
-    if req.a3_offset is not None: cell.a3_offset = req.a3_offset
-    if req.ttt_ms    is not None: cell.ttt_ms    = req.ttt_ms
+    if req.a3_offset is not None:
+        cell.a3_offset = req.a3_offset
+    if req.ttt_ms is not None:
+        cell.ttt_ms = req.ttt_ms
     change_id = f"CHG-{uuid.uuid4().hex[:6].upper()}"
     state.change_records[change_id] = {
-        "type": "tune_handover", "cell_id": req.cell_id,
-        "params": req.dict(), "sim_time_s": state.sim_time_s
+        "type":       "tune_handover",
+        "cell_id":    req.cell_id,
+        "params":     req.model_dump(),
+        "sim_time_s": state.sim_time_s,
     }
-    return {"change_id": change_id, "applied": req.dict()}
+    return {"change_id": change_id, "applied": req.model_dump()}
 
 
 class EnergyModeRequest(BaseModel):
     cell_id: str
-    mode:    str   # ACTIVE | SLEEP | SHUTDOWN
+    mode:    str  # ACTIVE | SLEEP | SHUTDOWN
+
 
 @app.post("/actions/enable_energy_saving")
 def enable_energy_saving(req: EnergyModeRequest):
@@ -249,25 +272,27 @@ def enable_energy_saving(req: EnergyModeRequest):
     try:
         mode = EnergyMode(req.mode)
     except ValueError:
-        raise HTTPException(400, f"Invalid mode: {req.mode}")
+        raise HTTPException(400, f"Invalid mode '{req.mode}'. Use ACTIVE, SLEEP, or SHUTDOWN")
     state.cells[req.cell_id].energy_mode = mode
     change_id = f"CHG-{uuid.uuid4().hex[:6].upper()}"
     state.change_records[change_id] = {
-        "type": "energy_mode", "cell_id": req.cell_id,
-        "mode": req.mode, "sim_time_s": state.sim_time_s
+        "type":       "energy_mode",
+        "cell_id":    req.cell_id,
+        "mode":       req.mode,
+        "sim_time_s": state.sim_time_s,
     }
-    return {"change_id": change_id, "applied": req.dict()}
+    return {"change_id": change_id, "applied": req.model_dump()}
 
 
 class RollbackRequest(BaseModel):
     change_id: str
+
 
 @app.post("/actions/rollback")
 def rollback(req: RollbackRequest):
     record = state.change_records.get(req.change_id)
     if not record:
         raise HTTPException(404, f"Change {req.change_id} not found")
-    # Revert based on type
     t = record["type"]
     if t == "energy_mode":
         state.cells[record["cell_id"]].energy_mode = EnergyMode.ACTIVE
@@ -277,7 +302,7 @@ def rollback(req: RollbackRequest):
             cell.a3_offset = 3.0
             cell.ttt_ms    = 40.0
     elif t == "slice_policy":
-        pass  # Planner stores original params; full rollback in AN-AGT-004
+        pass  # full rollback implemented in AN-AGT-004 (Executor Agent)
     return {"rolled_back": req.change_id, "record": record}
 
 
@@ -286,21 +311,30 @@ class FaultRequest(BaseModel):
     scenario: str
     params:   dict = {}
 
+
 @app.post("/fault/inject")
 def inject_fault(req: FaultRequest):
-    fi = FaultInjector()
-    fn = getattr(fi, req.scenario, None)
+    fn = getattr(FaultInjector, req.scenario, None)
     if fn is None:
-        raise HTTPException(400, f"Unknown scenario: {req.scenario}")
+        raise HTTPException(
+            400,
+            f"Unknown scenario '{req.scenario}'. "
+            "Available: evening_congestion, backhaul_degradation, "
+            "mobility_storm, policy_misconfiguration, energy_saving_failure"
+        )
     result = fn(state, **req.params)
     return {"injected": result}
 
+
 @app.post("/fault/restore")
 def restore_fault(req: FaultRequest):
-    fi = FaultInjector()
-    fn = getattr(fi, f"restore_{req.scenario}", None)
+    fn = getattr(FaultInjector, f"restore_{req.scenario}", None)
     if fn is None:
-        raise HTTPException(400, f"No restore for: {req.scenario}")
+        raise HTTPException(
+            400,
+            f"No restore method for '{req.scenario}'. "
+            "Available: backhaul, energy_mode, slice_priorities, handover_params"
+        )
     result = fn(state, **req.params)
     return {"restored": result}
 
