@@ -59,8 +59,8 @@ https://www.kaggle.com/datasets/marcodena/mobile-phone-activity
 aura-net/
 └── data/
     └── csv/
-        ├── telecom.csv
-        └── smartmeter.csv   # optional
+    └── telecom/
+        
 ```
 
 ### 2. Supported CSV format
