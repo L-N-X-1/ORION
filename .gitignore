@@ -25,3 +25,8 @@ data/volumes/
 # OS
 .DS_Store
 Thumbs.db
+
+# Data files
+data/csv/*.csv
+data/**/*.csv
+*.csv
