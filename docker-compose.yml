@@ -13,7 +13,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks: [aura-net-lab]
+    networks: [orion]
 
   kafka:
     image: confluentinc/cp-kafka:7.6.0
@@ -33,7 +33,7 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
-    networks: [aura-net-lab]
+    networks: [orion]
 
   redis:
     image: redis:7-alpine
@@ -46,7 +46,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks: [aura-net-lab]
+    networks: [orion]
 
   influxdb:
     image: influxdb:2.7
@@ -66,7 +66,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    networks: [aura-net-lab]
+    networks: [orion]
 
   postgres:
     image: postgres:16-alpine
@@ -82,7 +82,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks: [aura-net-lab]
+    networks: [orion]
 
   grafana:
     image: grafana/grafana:10.4.0
@@ -97,7 +97,7 @@ services:
     depends_on:
       influxdb:
         condition: service_healthy
-    networks: [aura-net-lab]
+    networks: [orion]
 
   prometheus:
     image: prom/prometheus:v2.51.0
@@ -105,7 +105,7 @@ services:
       - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
-    networks: [aura-net-lab]
+    networks: [orion]
 
   # ── App Services ────────────────────────────────────────────────
   digital-twin:
@@ -126,7 +126,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    networks: [aura-net-lab]
+    networks: [orion]
 
   collector:
     build: ./services/collector
@@ -138,7 +138,7 @@ services:
         condition: service_healthy
       influxdb:
         condition: service_healthy
-    networks: [aura-net-lab]
+    networks: [orion]
 
   actuator:
     build: ./services/actuator
@@ -150,7 +150,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [aura-net-lab]
+    networks: [orion]
 
   api-gateway:
     build: ./services/api-gateway
@@ -160,7 +160,7 @@ services:
     depends_on:
       digital-twin:
         condition: service_healthy
-    networks: [aura-net-lab]
+    networks: [orion]
 
   ai-agent:
     build: ./services/ai-agent
@@ -172,7 +172,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [aura-net-lab]
+    networks: [orion]
 
   nginx:
     build: ./ui/nginx
@@ -181,10 +181,10 @@ services:
     depends_on:
       - api-gateway
       - grafana
-    networks: [aura-net-lab]
+    networks: [orion]
 
 networks:
-  aura-net-lab:
+  orion:
     driver: bridge
 
 volumes:
