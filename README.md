@@ -1,6 +1,16 @@
 # ORION 🛰️
+<<<<<<< HEAD
 > Operational RAN Intelligence & Optimization Network
 
+=======
+
+<p align="center">
+  <img src="docs/orion_logo.png" alt="ORION logo" width="480"/>
+</p>
+
+> Operational RAN Intelligence & Optimization Network
+
+>>>>>>> f2faaf500c4d7c58508838c58fd646a7abc3139a
 An autonomous AI-powered Network Operations Center (NOC) for 5G/6G infrastructure — built on a digital twin simulation engine and a multi-agent AI pipeline.
 
 ---
@@ -15,11 +25,11 @@ An autonomous AI-powered Network Operations Center (NOC) for 5G/6G infrastructur
 
 ## Architecture
 
-```
-Digital Twin → Kafka → [Triage → RCA → Planner → Safety → Executor → Verifier]
-                                                              ↓
-                                                         Actuator → Twin
-```
+<p align="center">
+  <img src="docs/architecture.png" alt="ORION architecture diagram" width="860"/>
+</p>
+
+---
 
 ---
 
