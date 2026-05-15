@@ -5,13 +5,15 @@ Ticket: AN-TWN-001
 Auto-discovers and merges all CSV files in DATASET_DIR, then maps
 per-cell demand curves to the 12 simulation cells.
 
-Environment variables:
-  DATASET_DIR     : folder containing CSV files (default: /data/telecom)
-                    All .csv files in this folder are loaded and merged automatically.
-
-  DATASET_SOURCES : optional per-cell overrides (takes priority over auto-discovery)
+Environment variables (mutually exclusive — first match wins):
+  DATASET_SOURCES : per-cell overrides  (highest priority)
                     Format: cell_id:csv_path:id_column:id_value:value_column
                     Separate entries with |
+
+  DATASET_DIR     : folder containing CSV files (auto-discovery mode)
+                    All .csv files in this folder are loaded and merged automatically.
+
+  (neither set)   : synthetic diurnal fallback for all cells
 
 Supported CSV format (Italian Telecom 2013 and compatible):
   Columns: CellID, Datetime, smsin, smsout, callin, callout, internet
@@ -91,24 +93,48 @@ class DatasetLoader:
         self._tick_cache:   Dict[str, List[float]] = {}
         self._source_info:  Dict[str, str]         = {}
 
-        self._dataset_dir = os.getenv("DATASET_DIR", "/data/telecom")
-        overrides_raw     = os.getenv("DATASET_SOURCES", "").strip()
-        self._overrides   = CellSourceOverride.parse_env(overrides_raw) if overrides_raw else {}
+        overrides_raw = os.getenv("DATASET_SOURCES", "").strip()
+        dataset_dir   = os.getenv("DATASET_DIR",     "").strip()
 
-        # _df is explicitly typed — Pylance now knows it's either a DataFrame or None
-        self._df: Optional["pd.DataFrame"] = self._load_all_csvs(self._dataset_dir)
-
-        for cell_id in ALL_CELL_IDS:
-            if cell_id in self._overrides:
-                self._load_from_override(cell_id, self._overrides[cell_id])
-            elif self._df is not None:
-                # Guard: only enter this branch when _df is confirmed not None
-                self._load_from_merged(cell_id, self._df)
-            else:
+        if overrides_raw:
+            # DATASET_SOURCES is set — use per-cell override mode
+            print("[DatasetLoader] Mode: per-cell overrides (DATASET_SOURCES)")
+            self._load_mode_overrides(overrides_raw)
+        elif dataset_dir:
+            # DATASET_DIR is set — use folder auto-discovery mode
+            print(f"[DatasetLoader] Mode: folder auto-discovery (DATASET_DIR={dataset_dir})")
+            self._load_mode_directory(dataset_dir)
+        else:
+            # Neither set — fall back to synthetic for all cells
+            print("[DatasetLoader] Mode: synthetic (no DATASET_SOURCES or DATASET_DIR set)")
+            for cell_id in ALL_CELL_IDS:
                 self._use_synthetic(cell_id)
 
         self._expand_to_ticks()
         self._print_summary()
+
+    # ── Mode: per-cell overrides ─────────────────────────────────────
+
+    def _load_mode_overrides(self, overrides_raw: str) -> None:
+        """Load each cell from its explicitly configured CSV path."""
+        overrides = CellSourceOverride.parse_env(overrides_raw)
+        for cell_id in ALL_CELL_IDS:
+            if cell_id in overrides:
+                self._load_from_override(cell_id, overrides[cell_id])
+            else:
+                print(f"[DatasetLoader] {cell_id}: no override entry — using synthetic")
+                self._use_synthetic(cell_id)
+
+    # ── Mode: folder auto-discovery ──────────────────────────────────
+
+    def _load_mode_directory(self, folder: str) -> None:
+        """Merge all CSVs in folder, then extract per-cell curves."""
+        df = self._load_all_csvs(folder)
+        for cell_id in ALL_CELL_IDS:
+            if df is not None:
+                self._load_from_merged(cell_id, df)
+            else:
+                self._use_synthetic(cell_id)
 
     # ── Folder auto-discovery ────────────────────────────────────────
 
