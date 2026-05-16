@@ -51,7 +51,7 @@ services:
   influxdb:
     image: influxdb:2.7
     ports:
-      - "8086:8086"
+      - "18086:8086"
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
@@ -163,6 +163,8 @@ services:
     networks: [orion]
 
   ai-agent:
+    ports:
+      - "8004:8003"  
     build: ./services/ai-agent
     env_file: .env
     depends_on:
@@ -173,6 +175,13 @@ services:
       redis:
         condition: service_healthy
     networks: [orion]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # exposes host to container on Linux
+    environment:
+      - COLLECTOR_URL=http://collector:8002
+      - TWIN_URL=http://digital-twin:8001
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=llama3.2
 
   nginx:
     build: ./ui/nginx
