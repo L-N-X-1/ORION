@@ -30,8 +30,8 @@ import logging
 import os
 from typing import Any, Dict, List
 
-from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_ollama import ChatOllama
 
 from root_cause.correlator import correlation_matrix, detect_pattern
 from root_cause.hypothesis_tree import build_hypothesis_tree
@@ -56,7 +56,7 @@ log = logging.getLogger(__name__)
 # ── LLM setup ────────────────────────────────────────────────────────────────
 
 _llm = ChatOllama(
-    model=os.getenv("OLLAMA_MODEL", "llama3.3"),
+    model=os.getenv("OLLAMA_MODEL", "llama3.2"),
     temperature=0,
     base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
 )
@@ -121,10 +121,11 @@ async def root_cause_node(state: Dict[str, Any]) -> Dict[str, Any]:
     LangGraph node entry point.
 
     Reads incident_record from state, performs full RCA, and writes
-    rca_report back into state.
+    rca_report back into the state.
     """
     pipeline = PipelineState(**state)
 
+    # ── Guard: no incident record ─────────────────────────────────────────────
     if pipeline.incident_record is None:
         log.error("root_cause_node called without an IncidentRecord in state")
         pipeline.pipeline_halted = True
@@ -132,6 +133,21 @@ async def root_cause_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return pipeline.model_dump()
 
     incident: IncidentRecord = pipeline.incident_record
+
+    # ── Guard: skip re-run if RCA already exists for this incident ────────────
+    if pipeline.rca_report is not None:
+        existing_incident_id = (
+            pipeline.rca_report.get("incident_id")
+            if isinstance(pipeline.rca_report, dict)
+            else pipeline.rca_report.incident_id
+        )
+        if existing_incident_id == incident.incident_id:
+            log.info(
+                "Skipping RCA re-run — report already exists for %s",
+                incident.incident_id,
+            )
+            return pipeline.model_dump()
+
     log.info(
         "Root Cause Agent analysing incident %s [%s]",
         incident.incident_id,
@@ -154,7 +170,6 @@ async def root_cause_node(state: Dict[str, Any]) -> Dict[str, Any]:
     pattern = detect_pattern(kpis_by_entity)
     log.debug("Pattern detection result: %s", pattern)
 
-    # Compute pairwise PRB correlations for the structural analysis
     corr_matrix = correlation_matrix(kpis_by_entity)
 
     # ── Step 3: Topology-based dependency check ───────────────────────────────
@@ -186,7 +201,7 @@ async def root_cause_node(state: Dict[str, Any]) -> Dict[str, Any]:
         dominant.confidence,
     )
 
-    # ── Step 5: Structural impact summary ────────────────────────────────────
+    # ── Step 5: Structural impact summary ─────────────────────────────────────
     structural_info = await compute_structural_impact(incident.affected_entities)
 
     # ── Step 6: Build correlated KPI snapshot dict for the report ────────────
@@ -196,13 +211,13 @@ async def root_cause_node(state: Dict[str, Any]) -> Dict[str, Any]:
             latest = snaps[-1]
             correlated_kpis[eid] = {
                 "prb_utilization": latest.prb_utilization,
-                "latency_p95_ms": latest.latency_p95_ms,
+                "latency_p95_ms":  latest.latency_p95_ms,
                 "throughput_mbps": latest.throughput_mbps,
-                "sinr_db": latest.sinr_db,
-                "ho_fail_rate": latest.ho_fail_rate,
+                "sinr_db":         latest.sinr_db,
+                "ho_fail_rate":    latest.ho_fail_rate,
                 "packet_loss_pct": latest.packet_loss_pct,
-                "sla_violation": latest.sla_violation,
-                "energy_mode": latest.energy_mode,
+                "sla_violation":   latest.sla_violation,
+                "energy_mode":     latest.energy_mode,
             }
 
     # ── Step 7: Generate LLM summary ─────────────────────────────────────────
@@ -212,7 +227,7 @@ async def root_cause_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # ── Step 8: Determine remediation levers ─────────────────────────────────
     levers: List[str] = []
-    seen_levers = set()
+    seen_levers: set = set()
     for hyp in hypothesis_tree.hypotheses:
         if hyp.recommended_lever and hyp.recommended_lever not in seen_levers:
             levers.append(hyp.recommended_lever)
