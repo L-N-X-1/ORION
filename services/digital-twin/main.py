@@ -5,27 +5,29 @@ Ticket: AN-TWN-001
 FastAPI application that:
   1. Runs the SimPy simulation in a background thread.
   2. Exposes REST endpoints consumed by agents and the collector.
-  3. Optionally writes KPIs to InfluxDB and events to Kafka.
+  3. Writes KPIs to InfluxDB and events + KPIs to Kafka.
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 
 import simpy
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from world_state import WorldState, EnergyMode
 from dataset_loader import DatasetLoader
-from kpi_synthesizer import KpiSynthesizer
-from mobility import MobilityProcess
 from event_generator import EventGenerator
 from fault_injector import FaultInjector
+from kpi_synthesizer import KpiSynthesizer
+from mobility import MobilityProcess
 from whatif_runner import WhatIfRunner
+from world_state import EnergyMode, WorldState
 
 # ── Config ──────────────────────────────────────────────────────────
 TICK_INTERVAL_S = int(os.getenv("TICK_INTERVAL_S", "5"))
@@ -40,12 +42,11 @@ state    = WorldState()
 dataset  = DatasetLoader()
 synth    = KpiSynthesizer()
 mobility = MobilityProcess()
-events   = EventGenerator()
 whatif   = WhatIfRunner(dataset)
 
 _tick_counter = 0
 _sim_running  = True
-_state_lock   = threading.Lock()   # guards pinned_loads + current_load writes
+_state_lock   = threading.Lock()
 
 # ── InfluxDB writer (optional) ──────────────────────────────────────
 _influx_write = None
@@ -89,6 +90,49 @@ def _write_to_influx(kpis: list[dict]) -> None:
         print(f"[main] InfluxDB write error: {e}")
 
 
+# ── Kafka producer (sync, for use from the simulation thread) ────────
+_kafka_producer = None
+
+if KAFKA_BROKERS:
+    try:
+        from kafka import KafkaProducer
+        _kafka_producer = KafkaProducer(
+            bootstrap_servers=KAFKA_BROKERS,
+        )
+        print(f"[main] Kafka producer connected to {KAFKA_BROKERS}")
+    except Exception as e:
+        print(f"[main] Kafka producer unavailable: {e}")
+
+
+def _publish_kpis(kpis: list[dict]) -> None:
+    if not _kafka_producer:
+        return
+    for k in kpis:
+        payload = {
+            "entity_id":       k["cell_id"],
+            "timestamp":       datetime.now(timezone.utc).isoformat(),
+            "prb_utilization": k["prb_util"],
+            "throughput_mbps": k["throughput_mbps"],
+            "sinr_db":         k["sinr_db"],
+            "cqi":             k["cqi"],
+            "latency_p95_ms":  k["latency_p95_ms"],
+            "packet_loss_pct": k["packet_loss_pct"],
+            "cpu_load_pct":    k["cpu_load_pct"],
+            "ho_fail_rate":    k["ho_fail_rate"],
+            "energy_mode":     k["energy_mode"],
+            "sla_violation":   k["sla_violation"],
+            "is_peak":         k["is_peak"],
+        }
+        try:
+            _kafka_producer.send("aura.kpi.v1", json.dumps(payload).encode("utf-8"))
+        except Exception as e:
+            print(f"[main] KPI publish error: {e}")
+
+
+# ── EventGenerator — wired with Kafka producer ───────────────────────
+events = EventGenerator(kafka_producer=_kafka_producer)
+
+
 # ── SimPy simulation loop ────────────────────────────────────────────
 
 def _simulation_loop() -> None:
@@ -101,7 +145,6 @@ def _simulation_loop() -> None:
             tick_no = _tick_counter
             is_peak = dataset.is_peak_hour(tick_no)
 
-            # 1. Dataset loads + first pin enforcement (locked against inject races)
             with _state_lock:
                 for cid, cell in state.cells.items():
                     if cid not in state.pinned_loads:
@@ -110,25 +153,25 @@ def _simulation_loop() -> None:
                     if cid in state.cells:
                         state.cells[cid].current_load = load
 
-            # 2. Mobility — reads prb_utilization, never writes current_load
             mobility.run_tick(state)
 
-            # 3. Re-enforce pins after mobility (mobility triggers HO which can
-            #    indirectly shift UE counts but does NOT touch current_load —
-            #    this second enforcement is belt-and-suspenders for future safety)
             with _state_lock:
                 for cid, load in state.pinned_loads.items():
                     if cid in state.cells:
                         state.cells[cid].current_load = load
 
-            # 4. Synthesize KPIs — reads current_load, never writes it
             kpis = synth.synthesize(state, tick_no, is_peak)
 
-            # 5. Events + InfluxDB
-            events.evaluate(kpis, state)
+            # Events — published to Kafka automatically via EventGenerator
+            new_events = events.evaluate(kpis, state)
+            if new_events:
+                print(f"[main] tick={tick_no} emitted {len(new_events)} event(s): "
+                      f"{[e['event_type'] for e in new_events]}")
+
+            # KPIs — published to Kafka + InfluxDB
+            _publish_kpis(kpis)
             _write_to_influx(kpis)
 
-            # 6. Advance clocks
             state.sim_time_s += TICK_INTERVAL_S
             _tick_counter    += 1
 
@@ -144,6 +187,7 @@ def _simulation_loop() -> None:
 _sim_thread = threading.Thread(target=_simulation_loop, daemon=True)
 _sim_thread.start()
 
+
 # ── FastAPI app ──────────────────────────────────────────────────────
 app = FastAPI(title="AURA-NET Digital Twin", version="1.0.0")
 app.add_middleware(
@@ -154,7 +198,6 @@ app.add_middleware(
 )
 
 
-# ── Health ────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {
@@ -164,23 +207,18 @@ def health():
         "tick":            _tick_counter,
         "cells":           len(state.cells),
         "tick_interval_s": TICK_INTERVAL_S,
+        "kafka":           "connected" if _kafka_producer else "not connected",
         "influxdb":        "connected" if _influx_write else "not connected",
         "dataset_dir":     os.getenv("DATASET_DIR", "/data/telecom"),
         "dataset_sources": dataset.list_sources(),
     }
 
 
-# ── Metrics ───────────────────────────────────────────────────────────
 @app.get("/metrics")
 def get_metrics(
     cell_id: str | None = Query(None),
     last_n:  int        = Query(10, ge=1, le=60),
 ):
-    """Return recent KPI history. Optionally filter by cell_id.
-    The most recent entry in every response is patched with live
-    cell.current_load / prb_utilization so fault injections are
-    visible immediately, before the next tick completes.
-    """
     if cell_id:
         if cell_id not in state.cells:
             raise HTTPException(404, f"Cell {cell_id} not found")
@@ -195,13 +233,11 @@ def get_metrics(
     }
 
 
-# ── Topology ──────────────────────────────────────────────────────────
 @app.get("/topology")
 def get_topology(entity_id: str | None = Query(None)):
     return state.get_topology(entity_id)
 
 
-# ── Events ────────────────────────────────────────────────────────────
 @app.get("/events")
 def get_events(
     entity_id: str | None = Query(None),
@@ -212,7 +248,6 @@ def get_events(
     return {"events": events.get_recent_events(limit)}
 
 
-# ── What-if simulation ────────────────────────────────────────────────
 class WhatIfRequest(BaseModel):
     action_plan:   dict
     horizon_ticks: int = 120
@@ -220,11 +255,9 @@ class WhatIfRequest(BaseModel):
 
 @app.post("/whatif/run")
 def run_whatif(req: WhatIfRequest):
-    report = whatif.run(state, req.action_plan, req.horizon_ticks)
-    return report
+    return whatif.run(state, req.action_plan, req.horizon_ticks)
 
 
-# ── Actions ───────────────────────────────────────────────────────────
 class SlicePolicyRequest(BaseModel):
     slice_id:   str
     min_bw_pct: float | None = None
@@ -237,18 +270,13 @@ def apply_slice_policy(req: SlicePolicyRequest):
     if req.slice_id not in state.slices:
         raise HTTPException(404, f"Slice {req.slice_id} not found")
     sl = state.slices[req.slice_id]
-    if req.min_bw_pct is not None:
-        sl.min_bw_pct = req.min_bw_pct
-    if req.max_bw_pct is not None:
-        sl.max_bw_pct = req.max_bw_pct
-    if req.priority is not None:
-        sl.priority = req.priority
+    if req.min_bw_pct is not None: sl.min_bw_pct = req.min_bw_pct
+    if req.max_bw_pct is not None: sl.max_bw_pct = req.max_bw_pct
+    if req.priority   is not None: sl.priority   = req.priority
     change_id = f"CHG-{uuid.uuid4().hex[:6].upper()}"
     state.change_records[change_id] = {
-        "type":       "slice_policy",
-        "slice_id":   req.slice_id,
-        "params":     req.model_dump(),
-        "sim_time_s": state.sim_time_s,
+        "type": "slice_policy", "slice_id": req.slice_id,
+        "params": req.model_dump(), "sim_time_s": state.sim_time_s,
     }
     return {"change_id": change_id, "applied": req.model_dump()}
 
@@ -264,23 +292,19 @@ def tune_handover(req: HandoverRequest):
     if req.cell_id not in state.cells:
         raise HTTPException(404, f"Cell {req.cell_id} not found")
     cell = state.cells[req.cell_id]
-    if req.a3_offset is not None:
-        cell.a3_offset = req.a3_offset
-    if req.ttt_ms is not None:
-        cell.ttt_ms = req.ttt_ms
+    if req.a3_offset is not None: cell.a3_offset = req.a3_offset
+    if req.ttt_ms    is not None: cell.ttt_ms    = req.ttt_ms
     change_id = f"CHG-{uuid.uuid4().hex[:6].upper()}"
     state.change_records[change_id] = {
-        "type":       "tune_handover",
-        "cell_id":    req.cell_id,
-        "params":     req.model_dump(),
-        "sim_time_s": state.sim_time_s,
+        "type": "tune_handover", "cell_id": req.cell_id,
+        "params": req.model_dump(), "sim_time_s": state.sim_time_s,
     }
     return {"change_id": change_id, "applied": req.model_dump()}
 
 
 class EnergyModeRequest(BaseModel):
     cell_id: str
-    mode:    str  # ACTIVE | SLEEP | SHUTDOWN
+    mode:    str
 
 
 @app.post("/actions/enable_energy_saving")
@@ -294,10 +318,8 @@ def enable_energy_saving(req: EnergyModeRequest):
     state.cells[req.cell_id].energy_mode = mode
     change_id = f"CHG-{uuid.uuid4().hex[:6].upper()}"
     state.change_records[change_id] = {
-        "type":       "energy_mode",
-        "cell_id":    req.cell_id,
-        "mode":       req.mode,
-        "sim_time_s": state.sim_time_s,
+        "type": "energy_mode", "cell_id": req.cell_id,
+        "mode": req.mode, "sim_time_s": state.sim_time_s,
     }
     return {"change_id": change_id, "applied": req.model_dump()}
 
@@ -319,12 +341,9 @@ def rollback(req: RollbackRequest):
         if cell:
             cell.a3_offset = 3.0
             cell.ttt_ms    = 40.0
-    elif t == "slice_policy":
-        pass  # full rollback implemented in AN-AGT-004 (Executor Agent)
     return {"rolled_back": req.change_id, "record": record}
 
 
-# ── Fault injection ────────────────────────────────────────────────────
 class FaultRequest(BaseModel):
     scenario: str
     params:   dict = {}
@@ -334,12 +353,10 @@ class FaultRequest(BaseModel):
 def inject_fault(req: FaultRequest):
     fn = getattr(FaultInjector, req.scenario, None)
     if fn is None:
-        raise HTTPException(
-            400,
+        raise HTTPException(400,
             f"Unknown scenario '{req.scenario}'. "
             "Available: evening_congestion, backhaul_degradation, "
-            "mobility_storm, policy_misconfiguration, energy_saving_failure"
-        )
+            "mobility_storm, policy_misconfiguration, energy_saving_failure")
     with _state_lock:
         result = fn(state, **req.params)
     return {"injected": result}
@@ -349,36 +366,14 @@ def inject_fault(req: FaultRequest):
 def restore_fault(req: FaultRequest):
     fn = getattr(FaultInjector, f"restore_{req.scenario}", None)
     if fn is None:
-        raise HTTPException(
-            400,
+        raise HTTPException(400,
             f"No restore method for '{req.scenario}'. "
-            "Available: backhaul, energy_mode, slice_priorities, handover_params, evening_congestion"
-        )
+            "Available: backhaul, energy_mode, slice_priorities, handover_params, evening_congestion")
     with _state_lock:
         result = fn(state, **req.params)
     return {"restored": result}
 
 
-# ── Snapshot ──────────────────────────────────────────────────────────
 @app.get("/snapshot")
 def snapshot():
     return state.snapshot()
-
-
-# ── Debug (remove after fault injection is confirmed working) ─────────
-@app.get("/debug/pin")
-def debug_pin():
-    return {
-        "tick":         _tick_counter,
-        "pinned_loads": dict(state.pinned_loads),
-        "live_loads": {
-            cid: round(state.cells[cid].current_load, 4)
-            for cid in ["C00", "C01", "C10"]
-            if cid in state.cells
-        },
-        "metrics_prb": {
-            kpi["cell_id"]: kpi["prb_util"]
-            for kpi in state.get_all_latest_kpis()
-            if kpi["cell_id"] in ["C00", "C01", "C10"]
-        },
-    }
