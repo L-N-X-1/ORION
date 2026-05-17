@@ -37,7 +37,7 @@ KAFKA_BROKERS   = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "")
 
 # ── Globals ─────────────────────────────────────────────────────────
 state    = WorldState()
-dataset  = DatasetLoader()          # reads DATASET_DIR + DATASET_SOURCES from env
+dataset  = DatasetLoader()
 synth    = KpiSynthesizer()
 mobility = MobilityProcess()
 events   = EventGenerator()
@@ -45,6 +45,7 @@ whatif   = WhatIfRunner(dataset)
 
 _tick_counter = 0
 _sim_running  = True
+_state_lock   = threading.Lock()   # guards pinned_loads + current_load writes
 
 # ── InfluxDB writer (optional) ──────────────────────────────────────
 _influx_write = None
@@ -100,20 +101,31 @@ def _simulation_loop() -> None:
             tick_no = _tick_counter
             is_peak = dataset.is_peak_hour(tick_no)
 
-            # 1. Update cell loads from dataset
-            for cid, cell in state.cells.items():
-                cell.current_load = dataset.get_load_factor(cid, tick_no)
+            # 1. Dataset loads + first pin enforcement (locked against inject races)
+            with _state_lock:
+                for cid, cell in state.cells.items():
+                    if cid not in state.pinned_loads:
+                        cell.current_load = dataset.get_load_factor(cid, tick_no)
+                for cid, load in state.pinned_loads.items():
+                    if cid in state.cells:
+                        state.cells[cid].current_load = load
 
-            # 2. Run mobility
+            # 2. Mobility — reads prb_utilization, never writes current_load
             mobility.run_tick(state)
 
-            # 3. Synthesize KPIs
+            # 3. Re-enforce pins after mobility (mobility triggers HO which can
+            #    indirectly shift UE counts but does NOT touch current_load —
+            #    this second enforcement is belt-and-suspenders for future safety)
+            with _state_lock:
+                for cid, load in state.pinned_loads.items():
+                    if cid in state.cells:
+                        state.cells[cid].current_load = load
+
+            # 4. Synthesize KPIs — reads current_load, never writes it
             kpis = synth.synthesize(state, tick_no, is_peak)
 
-            # 4. Emit events
+            # 5. Events + InfluxDB
             events.evaluate(kpis, state)
-
-            # 5. Write to InfluxDB
             _write_to_influx(kpis)
 
             # 6. Advance clocks
@@ -124,7 +136,6 @@ def _simulation_loop() -> None:
 
     env.process(tick(env))
 
-    # Run one SimPy step per wall-clock TICK_INTERVAL_S seconds
     while _sim_running:
         env.step()
         time.sleep(TICK_INTERVAL_S)
@@ -146,10 +157,6 @@ app.add_middleware(
 # ── Health ────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    """
-    Returns service health plus dataset source info per cell.
-    Useful to confirm which cells are using real CSV data vs synthetic fallback.
-    """
     return {
         "status":          "ok",
         "service":         "digital-twin",
@@ -169,12 +176,23 @@ def get_metrics(
     cell_id: str | None = Query(None),
     last_n:  int        = Query(10, ge=1, le=60),
 ):
-    """Return recent KPI history. Optionally filter by cell_id."""
+    """Return recent KPI history. Optionally filter by cell_id.
+    The most recent entry in every response is patched with live
+    cell.current_load / prb_utilization so fault injections are
+    visible immediately, before the next tick completes.
+    """
     if cell_id:
         if cell_id not in state.cells:
             raise HTTPException(404, f"Cell {cell_id} not found")
-        return {"cell_id": cell_id, "kpis": state.get_kpi_history(cell_id, last_n)}
-    return {"kpis": state.get_all_latest_kpis()}
+        return {
+            "cell_id":     cell_id,
+            "kpis":        state.get_kpi_history(cell_id, last_n),
+            "pinned_load": state.pinned_loads.get(cell_id),
+        }
+    return {
+        "kpis":         state.get_all_latest_kpis(),
+        "pinned_loads": dict(state.pinned_loads),
+    }
 
 
 # ── Topology ──────────────────────────────────────────────────────────
@@ -322,7 +340,8 @@ def inject_fault(req: FaultRequest):
             "Available: evening_congestion, backhaul_degradation, "
             "mobility_storm, policy_misconfiguration, energy_saving_failure"
         )
-    result = fn(state, **req.params)
+    with _state_lock:
+        result = fn(state, **req.params)
     return {"injected": result}
 
 
@@ -333,9 +352,10 @@ def restore_fault(req: FaultRequest):
         raise HTTPException(
             400,
             f"No restore method for '{req.scenario}'. "
-            "Available: backhaul, energy_mode, slice_priorities, handover_params"
+            "Available: backhaul, energy_mode, slice_priorities, handover_params, evening_congestion"
         )
-    result = fn(state, **req.params)
+    with _state_lock:
+        result = fn(state, **req.params)
     return {"restored": result}
 
 
@@ -343,3 +363,22 @@ def restore_fault(req: FaultRequest):
 @app.get("/snapshot")
 def snapshot():
     return state.snapshot()
+
+
+# ── Debug (remove after fault injection is confirmed working) ─────────
+@app.get("/debug/pin")
+def debug_pin():
+    return {
+        "tick":         _tick_counter,
+        "pinned_loads": dict(state.pinned_loads),
+        "live_loads": {
+            cid: round(state.cells[cid].current_load, 4)
+            for cid in ["C00", "C01", "C10"]
+            if cid in state.cells
+        },
+        "metrics_prb": {
+            kpi["cell_id"]: kpi["prb_util"]
+            for kpi in state.get_all_latest_kpis()
+            if kpi["cell_id"] in ["C00", "C01", "C10"]
+        },
+    }

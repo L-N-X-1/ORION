@@ -3,8 +3,12 @@ AURA-NET Digital Twin — mobility.py
 Ticket: AN-TWN-001
 
 Simulates UE mobility and handover attempts.
-When a cell is overloaded (PRB > 80%), UEs probabilistically
-attempt handovers to the least-loaded neighbour.
+Handover eligibility is now A3-offset-aware:
+  - Normal offset (≥1.0 dB) : triggers above 80% PRB (load-driven)
+  - Misconfigured offset (<1.0 dB) : threshold drops proportionally,
+    modelling real RAN ping-pong sensitivity regardless of load.
+    At a3_offset=0.1 the threshold falls to ~53%, so mobility_storm
+    is observable without requiring a concurrent congestion fault.
 """
 from __future__ import annotations
 
@@ -26,7 +30,6 @@ class MobilityProcess:
         Evaluates handover eligibility for every UE.
         """
         for cell_id, cell in state.cells.items():
-            # Reset counters each tick
             cell.ho_attempts = 0
             cell.ho_failures  = 0
 
@@ -40,10 +43,17 @@ class MobilityProcess:
         if not serving:
             return
 
-        # Trigger handover when PRB > 80% or cell is being shut down
-        prb = serving.prb_utilization
+        prb    = serving.prb_utilization
         forced = serving.energy_mode == EnergyMode.SHUTDOWN
-        if prb < 80.0 and not forced:
+
+        # A3-aware trigger threshold:
+        #   normal offset (≥1.0 dB) → threshold = 80% PRB (load-driven HO)
+        #   misconfigured offset     → threshold drops as offset shrinks,
+        #                              modelling ping-pong sensitivity
+        #   Formula: threshold = 80 - (3.0 - a3_offset) * 10, floored at 20%
+        a3_threshold = max(20.0, 80.0 - (3.0 - serving.a3_offset) * 10.0)
+
+        if prb < a3_threshold and not forced:
             return
 
         best_neighbour = self._find_best_neighbour(ue, serving, state)
@@ -65,7 +75,6 @@ class MobilityProcess:
         if self._rng.random() < failure_prob:
             serving.ho_failures += 1
         else:
-            # Successful handover — move UE
             ue.serving_cell = best_neighbour
 
     def _find_best_neighbour(self, ue, serving, state: "WorldState"):
@@ -78,6 +87,5 @@ class MobilityProcess:
         ]
         if not candidates:
             return None
-        # pick the neighbour with the lowest PRB
         candidates.sort(key=lambda x: x[1])
         return candidates[0][0]

@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+
+
+
 if TYPE_CHECKING:
     from world_state import WorldState
 
@@ -32,6 +35,7 @@ class FaultInjector:
         for cid in targets:
             if cid in state.cells:
                 state.cells[cid].current_load = 0.98
+                state.pinned_loads[cid] = 0.98
         return {"scenario": "evening_congestion", "targets": targets, "load": 0.98}
 
     @staticmethod
@@ -104,3 +108,10 @@ class FaultInjector:
             state.cells[cell_id].a3_offset = 3.0
             state.cells[cell_id].ttt_ms    = 40.0
         return {"restored": "handover_params", "cell_id": cell_id}
+    
+    @staticmethod
+    def restore_evening_congestion(state: "WorldState", cells: list[str] | None = None) -> dict:
+        targets = cells or ["C00", "C01", "C10"]
+        for cid in targets:
+            state.pinned_loads.pop(cid, None)   # ← release pin
+        return {"restored": "evening_congestion", "targets": targets}
