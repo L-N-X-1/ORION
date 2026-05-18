@@ -181,7 +181,6 @@ services:
       - COLLECTOR_URL=http://collector:8002
       - TWIN_URL=http://digital-twin:8001
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - OLLAMA_MODEL=llama3.2
 
   nginx:
     build: ./ui/nginx
