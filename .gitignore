@@ -35,3 +35,5 @@ data/**/*.csv
 data/csv/*.csv
 data/**/*.csv
 >>>>>>> f2faaf500c4d7c58508838c58fd646a7abc3139a
+# Added by code-review-graph
+.code-review-graph/

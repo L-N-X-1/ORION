@@ -13,8 +13,10 @@ import json
 import os
 import threading
 import time
+import urllib.request
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 import simpy
 from fastapi import FastAPI, HTTPException, Query
@@ -36,6 +38,7 @@ INFLUXDB_TOKEN  = os.getenv("INFLUXDB_TOKEN", "")
 INFLUXDB_ORG    = os.getenv("INFLUXDB_ORG", "aura-net")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "aura_net")
 KAFKA_BROKERS   = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "")
+AGENT_URL       = os.getenv("AGENT_URL", "http://ai-agent:8003")
 
 # ── Globals ─────────────────────────────────────────────────────────
 state    = WorldState()
@@ -146,12 +149,20 @@ def _simulation_loop() -> None:
             is_peak = dataset.is_peak_hour(tick_no)
 
             with _state_lock:
+                _sf_cells = {
+                    cid for sf in state.synthetic_faults.values()
+                    for cid in sf.get("cells", [])
+                }
                 for cid, cell in state.cells.items():
-                    if cid not in state.pinned_loads:
+                    if cid not in state.pinned_loads and cid not in _sf_cells:
                         cell.current_load = dataset.get_load_factor(cid, tick_no)
                 for cid, load in state.pinned_loads.items():
                     if cid in state.cells:
                         state.cells[cid].current_load = load
+                for sf in state.synthetic_faults.values():
+                    for cid in sf.get("cells", []):
+                        if cid in state.cells:
+                            state.cells[cid].current_load = sf["prb_override"]
 
             mobility.run_tick(state)
 
@@ -159,6 +170,10 @@ def _simulation_loop() -> None:
                 for cid, load in state.pinned_loads.items():
                     if cid in state.cells:
                         state.cells[cid].current_load = load
+                for sf in state.synthetic_faults.values():
+                    for cid in sf.get("cells", []):
+                        if cid in state.cells:
+                            state.cells[cid].current_load = sf["prb_override"]
 
             kpis = synth.synthesize(state, tick_no, is_peak)
 
@@ -273,6 +288,8 @@ def apply_slice_policy(req: SlicePolicyRequest):
     if req.min_bw_pct is not None: sl.min_bw_pct = req.min_bw_pct
     if req.max_bw_pct is not None: sl.max_bw_pct = req.max_bw_pct
     if req.priority   is not None: sl.priority   = req.priority
+    # clear synthetic congestion fault — the slice policy remediation "worked"
+    state.synthetic_faults.pop("evening_congestion", None)
     change_id = f"CHG-{uuid.uuid4().hex[:6].upper()}"
     state.change_records[change_id] = {
         "type": "slice_policy", "slice_id": req.slice_id,
@@ -341,6 +358,13 @@ def rollback(req: RollbackRequest):
         if cell:
             cell.a3_offset = 3.0
             cell.ttt_ms    = 40.0
+    elif t == "slice_policy":
+        params = record.get("params", {})
+        sl = state.slices.get(params.get("slice_id", ""))
+        if sl:
+            if params.get("min_bw_pct") is not None: sl.min_bw_pct = params["min_bw_pct"]
+            if params.get("max_bw_pct") is not None: sl.max_bw_pct = params["max_bw_pct"]
+            if params.get("priority")   is not None: sl.priority   = params["priority"]
     return {"rolled_back": req.change_id, "record": record}
 
 
@@ -371,6 +395,73 @@ def restore_fault(req: FaultRequest):
             "Available: backhaul, energy_mode, slice_priorities, handover_params, evening_congestion")
     with _state_lock:
         result = fn(state, **req.params)
+    return {"restored": result}
+
+
+class AgentFaultRequest(BaseModel):
+    scenario: str = "evening_congestion"
+    cells: Optional[list[str]] = None
+
+
+def _fire_agent_event(event_payload: dict) -> None:
+    """Background thread: wait one tick then POST event to AI agent /run."""
+    time.sleep(TICK_INTERVAL_S + 1)  # let SimPy apply synthetic fault to cell loads
+    try:
+        body = json.dumps(event_payload).encode("utf-8")
+        req_obj = urllib.request.Request(
+            f"{AGENT_URL}/run",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req_obj, timeout=300) as resp:
+            result = json.loads(resp.read())
+            print(f"[agent-fault] pipeline result: {result.get('status') or result.get('verification_report')}")
+    except Exception as exc:
+        print(f"[agent-fault] pipeline fire error: {exc}")
+
+
+@app.post("/fault/inject-agent", summary="Inject ephemeral fault and trigger AI agent pipeline")
+def inject_agent_fault(req: AgentFaultRequest):
+    """
+    Injects a synthetic fault (no SimPy pin) and fires a NetworkEvent directly
+    to the AI agent /run endpoint in a background thread.
+    The agent's apply_slice_policy action clears the fault → verifier sees clean KPIs → success.
+    """
+    fn = getattr(FaultInjector, f"agent_{req.scenario}", None)
+    if fn is None:
+        raise HTTPException(400, f"Unknown agent scenario '{req.scenario}'. Available: evening_congestion")
+    params = {"cells": req.cells} if req.cells else {}
+    with _state_lock:
+        result = fn(state, **params)
+
+    event_id = f"evt-agent-{uuid.uuid4().hex[:8]}"
+    targets = result.get("targets", ["C00"])
+    event_payload = {
+        "event_id":       event_id,
+        "correlation_id": event_id,
+        "event_type":     "CONGESTION",
+        "entity_id":      targets[0],
+        "severity_hint":  "high",
+        "sim_time_s":     state.sim_time_s,
+        "timestamp":      datetime.now(timezone.utc).isoformat(),
+    }
+    threading.Thread(target=_fire_agent_event, args=(event_payload,), daemon=True).start()
+    return {
+        "injected":  result,
+        "event_id":  event_id,
+        "agent_url": f"{AGENT_URL}/run",
+        "note":      "Agent pipeline running in background. Check /approvals if human approval required.",
+    }
+
+
+@app.post("/fault/restore-agent", summary="Manually restore an ephemeral agent fault")
+def restore_agent_fault(req: AgentFaultRequest):
+    fn = getattr(FaultInjector, f"restore_agent_{req.scenario}", None)
+    if fn is None:
+        raise HTTPException(400, f"No agent restore for '{req.scenario}'. Available: evening_congestion")
+    params = {"cells": req.cells} if req.cells else {}
+    with _state_lock:
+        result = fn(state, **params)
     return {"restored": result}
 
 

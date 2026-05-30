@@ -3,29 +3,16 @@ orchestrator/graph.py
 ---------------------
 LangGraph StateGraph definition for the AURA-NET agent pipeline.
 
-Current wired nodes (Milestone 2):
-    triage       → NOC Triage Agent
-    root_cause   → Root Cause Agent
-
-Stub nodes (wired but no-op until their milestone):
-    planner      → Planner Agent        (Milestone 3)
-    safety       → Safety/Policy Agent  (Milestone 4)
-    executor     → Executor Agent       (Milestone 4)
-    verifier     → Verifier Agent       (Milestone 4-5)
-
 Graph flow:
-    START → triage → root_cause → planner → safety → executor → verifier → END
+    START → triage → root_cause → planner → safety ──(ALLOW)──────────────→ executor → verifier → END
+                                                    └─(ALLOW_WITH_APPROVAL)→ human_approval ──(approved)→ executor → verifier → END
+                                                    └─(DENY / halted)──────→ END
+                                                                           └─(rejected)────────────────→ END
 
-Conditional edges are used to short-circuit the pipeline when:
+Conditional edges short-circuit when:
   - triage or root_cause sets pipeline_halted = True
   - safety returns DENY
-
-State schema
-------------
-The pipeline state is a plain Python dict whose keys correspond to
-PipelineState fields.  LangGraph requires the state type to be either a
-TypedDict or an annotated dict.  We use PipelineState.model_fields to
-drive the TypedDict at runtime.
+  - safety returns ALLOW_WITH_APPROVAL and operator rejects
 """
 
 from __future__ import annotations
@@ -33,8 +20,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Literal
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from orchestrator.human_approval import human_approval_node
+from planner.agent import planner_node
 from root_cause.agent import root_cause_node
 from triage.agent import triage_node
 
@@ -43,28 +33,9 @@ log = logging.getLogger(__name__)
 # ── Stub nodes for future milestones ─────────────────────────────────────────
 
 
-async def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Milestone 3 — Planner Agent (stub)."""
-    log.info("Planner node: stub — passing state through")
-    return state
-
-
-async def safety_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Milestone 4 — Safety/Policy Agent (stub)."""
-    log.info("Safety node: stub — passing state through")
-    return state
-
-
-async def executor_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Milestone 4 — Executor Agent (stub)."""
-    log.info("Executor node: stub — passing state through")
-    return state
-
-
-async def verifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Milestone 4-5 — Verifier Agent (stub)."""
-    log.info("Verifier node: stub — passing state through")
-    return state
+from safety.agent import safety_node
+from executor.agent import executor_node
+from verifier.agent import verifier_node
 
 
 # ── Conditional routing helpers ───────────────────────────────────────────────
@@ -92,11 +63,12 @@ def _should_continue_after_rca(
 
 def _should_continue_after_safety(
     state: Dict[str, Any],
-) -> Literal["executor", "__end__"]:
+) -> Literal["executor", "human_approval", "__end__"]:
     """
-    Route to executor only if the safety decision is ALLOW.
-    ALLOW_WITH_APPROVAL and DENY both short-circuit to END
-    (the Safety Agent has already logged the decision and notified operators).
+    Route based on safety decision:
+      ALLOW              → executor (fully automated)
+      ALLOW_WITH_APPROVAL → human_approval (operator must confirm)
+      DENY / halted      → END
     """
     decision_record = state.get("policy_decision")
     if decision_record is None or state.get("pipeline_halted"):
@@ -106,10 +78,23 @@ def _should_continue_after_safety(
         if isinstance(decision_record, dict)
         else getattr(decision_record, "decision", None)
     )
+    log.info("safety_router: decision=%r halted=%s", decision, state.get("pipeline_halted"))
     if decision == "allow":
         return "executor"
+    if decision == "allow_with_approval":
+        return "human_approval"
     log.info("Safety gate blocked execution: decision=%s", decision)
     return END
+
+
+def _should_continue_after_human_approval(
+    state: Dict[str, Any],
+) -> Literal["executor", "__end__"]:
+    """Route to executor if operator approved, else END."""
+    if state.get("pipeline_halted"):
+        log.warning("Pipeline halted after human approval: %s", state.get("halt_reason"))
+        return END
+    return "executor"
 
 
 # ── Graph construction ────────────────────────────────────────────────────────
@@ -131,6 +116,7 @@ def build_graph() -> StateGraph:
     graph.add_node("root_cause", root_cause_node)
     graph.add_node("planner", planner_node)
     graph.add_node("safety", safety_node)
+    graph.add_node("human_approval", human_approval_node)
     graph.add_node("executor", executor_node)
     graph.add_node("verifier", verifier_node)
 
@@ -149,12 +135,17 @@ def build_graph() -> StateGraph:
         {"planner": "planner", END: END},
     )
 
-    # Planner → Safety (no condition: planner always passes to safety)
     graph.add_edge("planner", "safety")
 
     graph.add_conditional_edges(
         "safety",
         _should_continue_after_safety,
+        {"executor": "executor", "human_approval": "human_approval", END: END},
+    )
+
+    graph.add_conditional_edges(
+        "human_approval",
+        _should_continue_after_human_approval,
         {"executor": "executor", END: END},
     )
 
@@ -162,7 +153,7 @@ def build_graph() -> StateGraph:
     graph.add_edge("executor", "verifier")
     graph.add_edge("verifier", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=MemorySaver())
 
 
 # Module-level compiled graph — import this in langgraph_runner.py

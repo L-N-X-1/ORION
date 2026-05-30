@@ -28,11 +28,13 @@ from typing import Any, Dict
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from langgraph.types import Command
 
 from orchestrator.graph import pipeline
 from shared.event_bus import EventBus, poll_kpis_from_twin
 from shared.memory_store import store_kpi
-from shared.schemas import KPISnapshot, NetworkEvent
+from shared.redis_client import get_value
+from shared.schemas import ApprovalDecisionRequest, KPISnapshot, NetworkEvent
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
@@ -53,18 +55,31 @@ async def handle_network_event(event: NetworkEvent) -> None:
     """
     log.info("Received event %s [%s] on %s", event.event_id, event.event_type, event.entity_id)
     initial_state: Dict[str, Any] = {"raw_event": event.model_dump(mode="json")}
+    config = {"configurable": {"thread_id": event.event_id}}
     try:
-        result = await pipeline.ainvoke(initial_state)
+        result = await pipeline.ainvoke(initial_state, config=config)
         _log_pipeline_result(result)
     except Exception as exc:
         log.error("Pipeline failed for event %s: %s", event.event_id, exc, exc_info=True)
 
 
 def _log_pipeline_result(result: Dict[str, Any]) -> None:
+    if result is None:
+        log.warning("Pipeline returned None (checkpoint may have been lost)")
+        return
     incident = result.get("incident_record")
     rca = result.get("rca_report")
     halted = result.get("pipeline_halted", False)
     halt_reason = result.get("halt_reason")
+
+    if result.get("__interrupt__"):
+        incident_id = (
+            (result.get("policy_decision") or {}).get("incident_id", "unknown")
+            if isinstance(result.get("policy_decision"), dict)
+            else getattr(result.get("policy_decision"), "incident_id", "unknown")
+        )
+        log.info("Pipeline suspended — awaiting human approval for incident=%s", incident_id)
+        return
 
     if halted:
         log.warning("Pipeline halted: %s", halt_reason)
@@ -124,14 +139,88 @@ async def run_pipeline(event: NetworkEvent) -> JSONResponse:
     Useful for testing without Kafka.
     """
     initial_state: Dict[str, Any] = {"raw_event": event.model_dump(mode="json")}
+    config = {"configurable": {"thread_id": event.event_id}}
     try:
-        result = await pipeline.ainvoke(initial_state)
+        result = await pipeline.ainvoke(initial_state, config=config)
     except Exception as exc:
         log.error("Pipeline error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
+    if result.get("__interrupt__"):
+        incident_id = (
+            (result.get("policy_decision") or {}).get("incident_id", "unknown")
+            if isinstance(result.get("policy_decision"), dict)
+            else getattr(result.get("policy_decision"), "incident_id", "unknown")
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "awaiting_approval",
+                "incident_id": incident_id,
+                "approve_url": f"/approvals/{incident_id}/decision",
+            },
+        )
     serialisable = _serialise_state(result)
     return JSONResponse(content=serialisable)
+
+
+@app.post(
+    "/approvals/{incident_id}/decision",
+    summary="Approve or reject a pending human-approval gate",
+)
+async def decide_approval(incident_id: str, body: ApprovalDecisionRequest) -> Dict[str, Any]:
+    """
+    Resume a pipeline suspended at the human_approval node.
+
+    The pipeline paused because the Safety Agent returned ALLOW_WITH_APPROVAL.
+    POST with {"decision": "approved", "approver": "ops@example.com"} to continue
+    to the executor, or {"decision": "rejected"} to terminate the pipeline.
+    """
+    raw = await get_value(f"approval:{incident_id}")
+    if not raw:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No pending approval found for incident {incident_id}. "
+                   "It may have already been decided or expired (TTL 30 min).",
+        )
+
+    approval_data = json.loads(raw)
+    thread_id = approval_data["thread_id"]
+
+    log.info(
+        "Operator decision received — incident=%s decision=%s approver=%s",
+        incident_id,
+        body.decision,
+        body.approver,
+    )
+
+    try:
+        result = await pipeline.ainvoke(
+            Command(resume={"decision": body.decision, "approver": body.approver}),
+            config={"configurable": {"thread_id": thread_id}},
+        )
+    except Exception as exc:
+        err = str(exc)
+        log.error("Failed to resume pipeline for incident=%s: %s", incident_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=err)
+
+    if result is None:
+        raise HTTPException(
+            status_code=410,
+            detail=f"Checkpoint for incident {incident_id} no longer exists "
+                   "(service may have restarted — in-memory checkpoint was lost). "
+                   "Re-trigger the incident.",
+        )
+
+    _log_pipeline_result(result)
+    return {
+        "status": "resumed",
+        "incident_id": incident_id,
+        "thread_id": thread_id,
+        "decision": body.decision,
+        "approver": body.approver,
+        "pipeline_halted": result.get("pipeline_halted", False),
+    }
 
 
 @app.post("/seed-kpi", summary="Dev-only: seed a KPI snapshot into the memory store")

@@ -34,6 +34,7 @@ def build_hypothesis_tree(
     pattern: Dict[str, Any],
     kpis_by_entity: Dict[str, List[KPISnapshot]],
     topology: Dict[str, Any],
+    incident_type: IncidentType | None = None,
 ) -> HypothesisTree:
     """
     Produce a ranked HypothesisTree with confidence scores.
@@ -41,6 +42,7 @@ def build_hypothesis_tree(
     pattern         — output of correlator.detect_pattern()
     kpis_by_entity  — {entity_id: [KPISnapshot, ...]}
     topology        — topology graph (neighbours, backhaul_peers, …)
+    incident_type   — optional fallback when KPI evidence is inconclusive
     """
     hypotheses: List[Hypothesis] = []
     dominant: IncidentType = pattern.get("dominant_pattern", IncidentType.UNKNOWN)
@@ -145,14 +147,30 @@ def build_hypothesis_tree(
         h.rank = i
 
     if not hypotheses:
+        incident_key = (
+            incident_type.value
+            if hasattr(incident_type, "value")
+            else str(incident_type).lower()
+        )
+        fallback_lever = {
+            "congestion": _LEVER_MAP["traffic_burst_slice_too_narrow"],
+            "backhaul_degradation": _LEVER_MAP["backhaul_capacity_reduction"],
+            "mobility_storm": _LEVER_MAP["bad_handover_parameters"],
+            "misconfiguration": _LEVER_MAP["slice_policy_misconfiguration"],
+            "outage": _LEVER_MAP["cell_outage"],
+        }.get(incident_key, "")
+
         hypotheses.append(
             Hypothesis(
                 rank=1,
                 label="unknown_root_cause",
-                description="Insufficient KPI data to determine root cause.",
+                description=(
+                    "Insufficient KPI data to determine root cause. "
+                    "Using incident classification as a conservative fallback."
+                ),
                 confidence=0.10,
                 supporting_kpis=[],
-                recommended_lever="",
+                recommended_lever=fallback_lever,
             )
         )
 

@@ -193,6 +193,7 @@ async def root_cause_node(state: Dict[str, Any]) -> Dict[str, Any]:
         pattern=pattern,
         kpis_by_entity=kpis_by_entity,
         topology=primary_topo,
+        incident_type=incident.incident_type,
     )
     dominant = hypothesis_tree.dominant_root
     log.info(

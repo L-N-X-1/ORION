@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -222,7 +222,20 @@ class PipelineState(BaseModel):
     change_confirmation: Optional[ChangeConfirmation] = None
     verification_report: Optional[VerificationReport] = None
 
+    # Human approval (set when safety returns ALLOW_WITH_APPROVAL)
+    human_approved_by: Optional[str] = None
+
     # Pipeline control
     error: Optional[str] = None
     pipeline_halted: bool = False
     halt_reason: Optional[str] = None
+
+
+# ─────────────────────────────────────────────
+# Human approval API request body
+# ─────────────────────────────────────────────
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    approver: str = "operator"
+    reason: str = ""
