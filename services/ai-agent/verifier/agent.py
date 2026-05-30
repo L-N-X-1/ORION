@@ -54,7 +54,7 @@ async def verifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
 		final_sla = True
 	else:
 		# trigger rollback
-		await trigger_rollback(cc.change_id)
+		await trigger_rollback(cc.change_id, cc.incident_id)
 		rollback_triggered = True
 		outcome = "regression"
 

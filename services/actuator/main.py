@@ -136,7 +136,7 @@ async def apply_slice_policy(req: SlicePolicyRequest):
         "change_id": change_id,
         "incident_id": req.incident_id,
         "action_type": "apply_slice_policy",
-        "parameters": payload,
+        "parameters": {**payload, "_twin_change_id": body.get("change_id", "")},
         "pre_change_kpis": pre_kpis,
         "status": "applied",
         "sim_time_s": body.get("applied", {}).get("sim_time_s"),
@@ -158,7 +158,7 @@ async def tune_handover(req: HandoverRequest):
         "change_id": change_id,
         "incident_id": req.incident_id,
         "action_type": "tune_handover",
-        "parameters": payload,
+        "parameters": {**payload, "_twin_change_id": body.get("change_id", "")},
         "pre_change_kpis": pre_kpis,
         "status": "applied",
         "sim_time_s": body.get("applied", {}).get("sim_time_s"),
@@ -180,7 +180,7 @@ async def enable_energy_saving(req: EnergyModeRequest):
         "change_id": change_id,
         "incident_id": req.incident_id,
         "action_type": "enable_energy_saving",
-        "parameters": payload,
+        "parameters": {**payload, "_twin_change_id": body.get("change_id", "")},
         "pre_change_kpis": pre_kpis,
         "status": "applied",
         "sim_time_s": body.get("sim_time_s"),
@@ -207,13 +207,13 @@ async def get_change_snapshot(change_id: str):
 
 @app.post("/actions/rollback")
 async def rollback(req: RollbackRequest):
-    # lookup change
     row = await app.state._pg.fetchrow("SELECT * FROM change_records WHERE change_id=$1", req.change_id)
     if not row:
         raise HTTPException(404, "change not found")
-    # forward to twin
+    params = json.loads(row["parameters"]) if isinstance(row["parameters"], str) else (row["parameters"] or {})
+    twin_change_id = params.get("_twin_change_id") or req.change_id
     client: httpx.AsyncClient = app.state._client
-    resp = await client.post(f"{TWIN_URL}/actions/rollback", json={"change_id": req.change_id})
+    resp = await client.post(f"{TWIN_URL}/actions/rollback", json={"change_id": twin_change_id})
     resp.raise_for_status()
     await app.state._pg.execute("UPDATE change_records SET status='rolled_back' WHERE change_id=$1", req.change_id)
     return {"rolled_back": req.change_id}

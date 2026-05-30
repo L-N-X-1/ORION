@@ -164,7 +164,8 @@ class WorldState:
         self.change_records: Dict[str, dict]      = {}
 
         self._build_topology()
-        self.pinned_loads: Dict[str, float] = {}   # cell_id → locked load (fault injection)
+        self.pinned_loads: Dict[str, float] = {}    # cell_id → locked load (fault injection)
+        self.synthetic_faults: Dict[str, dict] = {} # ephemeral agent-testable faults (no SimPy pin)
 
     # ── topology bootstrap ──────────────────────────────────────────
 

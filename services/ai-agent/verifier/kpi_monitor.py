@@ -24,13 +24,13 @@ async def poll_post_change_kpis(change_id: str, target_entity: str, ticks: int, 
 	results: List[Dict[str, Any]] = []
 	try:
 		for _ in range(ticks):
-			# call twin for latest metrics
+			# sleep first — give simulation loop one tick to propagate post-action state
+			await asyncio.sleep(interval_s)
 			resp = await client.get(f"{TWIN_URL}/metrics", params={"cell_id": target_entity, "last_n": 1})
 			resp.raise_for_status()
 			data = resp.json().get("kpis", [])
 			if data:
 				results.append(data[-1])
-			await asyncio.sleep(interval_s)
 		return results
 	finally:
 		await client.aclose()
