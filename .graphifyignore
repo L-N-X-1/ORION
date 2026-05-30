@@ -1,0 +1,26 @@
+# Images
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+
+# Standard Docs
+*.md
+*.txt
+*.pdf
+*.csv
+*.rst
+
+# Web/Config treated as Docs
+*.html
+*.htm
+*.yaml
+*.yml
+*.json
+*.jsonc
+*.lock
+*.toml
+
+# Hidden/System
+.*

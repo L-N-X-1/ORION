@@ -1,0 +1,854 @@
+{
+  "communities": {
+    "0": [
+      "actuator_energy_mode_rationale_1",
+      "basemodel",
+      "digital_twin_fault_injector_backhaul_degradation",
+      "digital_twin_fault_injector_energy_saving_failure",
+      "digital_twin_fault_injector_mobility_storm",
+      "digital_twin_fault_injector_policy_misconfiguration",
+      "digital_twin_fault_injector_rationale_1",
+      "digital_twin_fault_injector_restore_backhaul",
+      "digital_twin_fault_injector_restore_energy_mode",
+      "digital_twin_fault_injector_restore_evening_congestion",
+      "digital_twin_fault_injector_restore_handover_params",
+      "digital_twin_fault_injector_restore_slice_priorities",
+      "digital_twin_kpi_synthesizer_kpisynthesizer_avg_neighbour_load",
+      "digital_twin_kpi_synthesizer_kpisynthesizer_compute_cell_kpi",
+      "digital_twin_kpi_synthesizer_kpisynthesizer_init",
+      "digital_twin_kpi_synthesizer_kpisynthesizer_synthesize",
+      "digital_twin_kpi_synthesizer_rationale_1",
+      "digital_twin_kpi_synthesizer_rationale_49",
+      "digital_twin_kpi_synthesizer_sinr_to_cqi",
+      "digital_twin_main_apply_slice_policy",
+      "digital_twin_main_enable_energy_saving",
+      "digital_twin_main_energymoderequest",
+      "digital_twin_main_faultrequest",
+      "digital_twin_main_get_events",
+      "digital_twin_main_get_metrics",
+      "digital_twin_main_get_topology",
+      "digital_twin_main_handoverrequest",
+      "digital_twin_main_health",
+      "digital_twin_main_inject_fault",
+      "digital_twin_main_publish_kpis",
+      "digital_twin_main_rationale_1",
+      "digital_twin_main_restore_fault",
+      "digital_twin_main_rollback",
+      "digital_twin_main_rollbackrequest",
+      "digital_twin_main_run_whatif",
+      "digital_twin_main_simulation_loop",
+      "digital_twin_main_slicepolicyrequest",
+      "digital_twin_main_snapshot",
+      "digital_twin_main_tune_handover",
+      "digital_twin_main_whatifrequest",
+      "digital_twin_main_write_to_influx",
+      "digital_twin_mobility_mobilityprocess",
+      "digital_twin_mobility_mobilityprocess_evaluate_handover",
+      "digital_twin_mobility_mobilityprocess_find_best_neighbour",
+      "digital_twin_mobility_mobilityprocess_init",
+      "digital_twin_mobility_mobilityprocess_run_tick",
+      "digital_twin_mobility_rationale_1",
+      "digital_twin_mobility_rationale_28",
+      "digital_twin_whatif_runner_rationale_1",
+      "digital_twin_whatif_runner_rationale_192",
+      "digital_twin_whatif_runner_rationale_40",
+      "digital_twin_whatif_runner_rationale_63",
+      "digital_twin_whatif_runner_rationale_97",
+      "digital_twin_whatif_runner_whatifrunner_apply_action",
+      "digital_twin_whatif_runner_whatifrunner_build_report",
+      "digital_twin_whatif_runner_whatifrunner_confidence",
+      "digital_twin_whatif_runner_whatifrunner_init",
+      "digital_twin_whatif_runner_whatifrunner_run",
+      "digital_twin_whatif_runner_whatifrunner_simulate",
+      "schemas_aura_kpi_v1_energy_mode_enum",
+      "services_actuator_energy_mode_py",
+      "services_digital_twin_fault_injector_py",
+      "services_digital_twin_kpi_synthesizer_py",
+      "services_digital_twin_main_py",
+      "services_digital_twin_mobility_py",
+      "services_digital_twin_whatif_runner_py"
+    ],
+    "1": [
+      "services_ai_agent_triage_classifier_py",
+      "shared_event_bus_eventbus",
+      "shared_event_bus_eventbus_dispatch",
+      "shared_event_bus_eventbus_handle_event",
+      "shared_event_bus_eventbus_handle_kpi",
+      "shared_event_bus_eventbus_init",
+      "shared_event_bus_eventbus_on_event",
+      "shared_event_bus_eventbus_start",
+      "shared_event_bus_eventbus_stop",
+      "shared_event_bus_rationale_110",
+      "shared_event_bus_rationale_114",
+      "shared_event_bus_rationale_147",
+      "shared_schemas_kpisnapshot",
+      "shared_schemas_networkevent",
+      "tests_unit_test_triage_classifier_py",
+      "triage_classifier_classify_from_event",
+      "triage_classifier_classify_from_kpis",
+      "triage_classifier_compute_severity",
+      "triage_classifier_rationale_1",
+      "triage_classifier_rationale_44",
+      "triage_classifier_rationale_53",
+      "triage_classifier_rationale_97",
+      "unit_test_triage_classifier_make_event",
+      "unit_test_triage_classifier_make_kpi",
+      "unit_test_triage_classifier_rationale_1",
+      "unit_test_triage_classifier_testclassifyfromevent",
+      "unit_test_triage_classifier_testclassifyfromevent_test_backhaul_degradation",
+      "unit_test_triage_classifier_testclassifyfromevent_test_case_insensitive",
+      "unit_test_triage_classifier_testclassifyfromevent_test_congestion",
+      "unit_test_triage_classifier_testclassifyfromevent_test_ho_failure_maps_to_mobility_storm",
+      "unit_test_triage_classifier_testclassifyfromevent_test_outage",
+      "unit_test_triage_classifier_testclassifyfromevent_test_unknown_event_type",
+      "unit_test_triage_classifier_testclassifyfromkpis",
+      "unit_test_triage_classifier_testclassifyfromkpis_test_empty_returns_unknown",
+      "unit_test_triage_classifier_testclassifyfromkpis_test_high_ho_fail_returns_mobility_storm",
+      "unit_test_triage_classifier_testclassifyfromkpis_test_high_latency_low_prb_returns_backhaul",
+      "unit_test_triage_classifier_testclassifyfromkpis_test_high_prb_returns_congestion",
+      "unit_test_triage_classifier_testclassifyfromkpis_test_normal_kpis_return_unknown",
+      "unit_test_triage_classifier_testclassifyfromkpis_test_shutdown_returns_outage",
+      "unit_test_triage_classifier_testcomputeseverity",
+      "unit_test_triage_classifier_testcomputeseverity_test_congestion_without_sla_is_high",
+      "unit_test_triage_classifier_testcomputeseverity_test_hint_critical_overrides",
+      "unit_test_triage_classifier_testcomputeseverity_test_many_sla_violations_raise_severity",
+      "unit_test_triage_classifier_testcomputeseverity_test_outage_is_critical"
+    ],
+    "2": [
+      "digital_twin_world_state_linkstatus",
+      "enum",
+      "planner_action_catalogue_map_lever_to_actions",
+      "planner_action_catalogue_rationale_1",
+      "planner_action_catalogue_rationale_10",
+      "planner_agent_explain_action",
+      "planner_agent_planner_node",
+      "planner_agent_rationale_1",
+      "planner_delta_forecast_rationale_1",
+      "planner_delta_forecast_score_forecast",
+      "safety_policy_engine_evaluate",
+      "safety_policy_engine_rationale_1",
+      "services_ai_agent_planner_action_catalogue_py",
+      "services_ai_agent_planner_agent_py",
+      "services_ai_agent_planner_delta_forecast_py",
+      "services_ai_agent_safety_policy_engine_py",
+      "services_ai_agent_shared_schemas_py",
+      "services_ai_agent_verifier_agent_py",
+      "services_ai_agent_verifier_kpi_monitor_py",
+      "services_ai_agent_verifier_postmortem_py",
+      "services_ai_agent_verifier_rollback_trigger_py",
+      "shared_schemas_actionparam",
+      "shared_schemas_actionplan",
+      "shared_schemas_candidateaction",
+      "shared_schemas_incidenttype",
+      "shared_schemas_pipelinestate",
+      "shared_schemas_policydecision",
+      "shared_schemas_rationale_1",
+      "shared_schemas_rationale_209",
+      "shared_schemas_severity",
+      "shared_schemas_verificationreport",
+      "str",
+      "verifier_agent_rationale_1",
+      "verifier_agent_verifier_node",
+      "verifier_kpi_monitor_poll_post_change_kpis",
+      "verifier_kpi_monitor_rationale_1",
+      "verifier_postmortem_generate_postmortem",
+      "verifier_postmortem_rationale_1",
+      "verifier_rollback_trigger_rationale_1",
+      "verifier_rollback_trigger_trigger_rollback"
+    ],
+    "3": [
+      "collector_query_metrics_rationale_1",
+      "orchestrator_langgraph_runner_inspect_memory",
+      "orchestrator_langgraph_runner_rationale_151",
+      "services_ai_agent_shared_memory_store_py",
+      "services_ai_agent_shared_tools_py",
+      "services_ai_agent_triage_agent_py",
+      "services_ai_agent_triage_evidence_py",
+      "shared_memory_store_all_incidents",
+      "shared_memory_store_find_incident_by_correlation",
+      "shared_memory_store_get_incident",
+      "shared_memory_store_get_latest_kpi",
+      "shared_memory_store_get_recent_kpis",
+      "shared_memory_store_rationale_1",
+      "shared_memory_store_rationale_61",
+      "shared_memory_store_store_incident",
+      "shared_schemas_incidentrecord",
+      "shared_tools_create_ticket",
+      "shared_tools_get_client",
+      "shared_tools_get_full_topology",
+      "shared_tools_get_topology",
+      "shared_tools_query_all_kpis",
+      "shared_tools_query_metrics",
+      "shared_tools_rationale_1",
+      "shared_tools_rationale_107",
+      "shared_tools_rationale_128",
+      "triage_agent_generate_summary",
+      "triage_agent_rationale_1",
+      "triage_agent_rationale_108",
+      "triage_agent_rationale_78",
+      "triage_agent_triage_node",
+      "triage_evidence_build_evidence_window",
+      "triage_evidence_expand_scope",
+      "triage_evidence_rationale_1",
+      "triage_evidence_rationale_36",
+      "triage_evidence_rationale_59",
+      "triage_incident_record_enrich_incident",
+      "triage_incident_record_new_incident",
+      "triage_incident_record_rationale_1",
+      "triage_incident_record_rationale_35",
+      "triage_incident_record_rationale_55"
+    ],
+    "4": [
+      "root_cause_agent_generate_rca_summary",
+      "root_cause_agent_map_label_to_type",
+      "root_cause_agent_rationale_1",
+      "root_cause_agent_rationale_120",
+      "root_cause_agent_rationale_262",
+      "root_cause_agent_rationale_85",
+      "root_cause_agent_root_cause_node",
+      "root_cause_correlator_correlation_matrix",
+      "root_cause_correlator_pearson",
+      "root_cause_correlator_rationale_1",
+      "root_cause_correlator_rationale_34",
+      "root_cause_correlator_rationale_56",
+      "root_cause_topology_graph_compute_structural_impact",
+      "root_cause_topology_graph_find_synchronised_degradation",
+      "root_cause_topology_graph_get_backhaul_peers",
+      "root_cause_topology_graph_get_neighbours",
+      "root_cause_topology_graph_rationale_1",
+      "root_cause_topology_graph_rationale_28",
+      "root_cause_topology_graph_rationale_34",
+      "root_cause_topology_graph_rationale_44",
+      "root_cause_topology_graph_rationale_73",
+      "services_ai_agent_root_cause_agent_py",
+      "services_ai_agent_root_cause_correlator_py",
+      "services_ai_agent_root_cause_topology_graph_py",
+      "shared_schemas_rcareport"
+    ],
+    "5": [
+      "data_kafka_schemas_aura_kpi_v1_json",
+      "schemas_aura_kpi_v1_cqi_maximum",
+      "schemas_aura_kpi_v1_cqi_minimum",
+      "schemas_aura_kpi_v1_properties",
+      "schemas_aura_kpi_v1_properties_cell_id",
+      "schemas_aura_kpi_v1_properties_cpu_load_pct",
+      "schemas_aura_kpi_v1_properties_cqi",
+      "schemas_aura_kpi_v1_properties_ho_fail_rate",
+      "schemas_aura_kpi_v1_properties_is_peak",
+      "schemas_aura_kpi_v1_properties_latency_p95_ms",
+      "schemas_aura_kpi_v1_properties_packet_loss_pct",
+      "schemas_aura_kpi_v1_properties_prb_util",
+      "schemas_aura_kpi_v1_properties_sim_time_s",
+      "schemas_aura_kpi_v1_properties_sinr_db",
+      "schemas_aura_kpi_v1_properties_sla_violation",
+      "schemas_aura_kpi_v1_properties_throughput_mbps",
+      "schemas_aura_kpi_v1_properties_ts",
+      "schemas_aura_kpi_v1_required",
+      "schemas_aura_kpi_v1_schema",
+      "schemas_aura_kpi_v1_title",
+      "schemas_aura_kpi_v1_ts_format",
+      "schemas_aura_kpi_v1_type"
+    ],
+    "6": [
+      "actuator_main_apply_slice_policy",
+      "actuator_main_enable_energy_saving",
+      "actuator_main_energymoderequest",
+      "actuator_main_gen_change_id",
+      "actuator_main_get_change",
+      "actuator_main_get_change_snapshot",
+      "actuator_main_handoverrequest",
+      "actuator_main_health",
+      "actuator_main_metrics",
+      "actuator_main_pg_connect",
+      "actuator_main_rationale_1",
+      "actuator_main_record_audit",
+      "actuator_main_rollback",
+      "actuator_main_rollbackrequest",
+      "actuator_main_shutdown",
+      "actuator_main_slicepolicyrequest",
+      "actuator_main_startup",
+      "actuator_main_store_change_record",
+      "actuator_main_take_pre_change_snapshot",
+      "actuator_main_tune_handover",
+      "services_actuator_main_py"
+    ],
+    "7": [
+      "digital_twin_dataset_loader_cellsourceoverride",
+      "digital_twin_dataset_loader_datasetloader_expand_to_ticks",
+      "digital_twin_dataset_loader_datasetloader_get_load_factor",
+      "digital_twin_dataset_loader_datasetloader_init",
+      "digital_twin_dataset_loader_datasetloader_is_peak_hour",
+      "digital_twin_dataset_loader_datasetloader_list_sources",
+      "digital_twin_dataset_loader_datasetloader_load_all_csvs",
+      "digital_twin_dataset_loader_datasetloader_load_from_merged",
+      "digital_twin_dataset_loader_datasetloader_load_from_override",
+      "digital_twin_dataset_loader_datasetloader_load_mode_directory",
+      "digital_twin_dataset_loader_datasetloader_load_mode_overrides",
+      "digital_twin_dataset_loader_datasetloader_normalise",
+      "digital_twin_dataset_loader_datasetloader_pick_value_column",
+      "digital_twin_dataset_loader_datasetloader_print_summary",
+      "digital_twin_dataset_loader_datasetloader_synthetic_diurnal",
+      "digital_twin_dataset_loader_datasetloader_use_synthetic",
+      "digital_twin_dataset_loader_parse_env",
+      "digital_twin_dataset_loader_rationale_1",
+      "digital_twin_dataset_loader_rationale_119",
+      "digital_twin_dataset_loader_rationale_131",
+      "services_digital_twin_dataset_loader_py"
+    ],
+    "8": [
+      "digital_twin_world_state_backhaullink",
+      "digital_twin_world_state_backhaullink_degrade",
+      "digital_twin_world_state_backhaullink_restore",
+      "digital_twin_world_state_cell",
+      "digital_twin_world_state_effective_prb",
+      "digital_twin_world_state_networkslice",
+      "digital_twin_world_state_prb_utilization",
+      "digital_twin_world_state_rationale_1",
+      "digital_twin_world_state_rationale_148",
+      "digital_twin_world_state_rationale_254",
+      "digital_twin_world_state_ue",
+      "digital_twin_world_state_ue_to_dict",
+      "digital_twin_world_state_worldstate",
+      "digital_twin_world_state_worldstate_build_topology",
+      "digital_twin_world_state_worldstate_clone",
+      "digital_twin_world_state_worldstate_get_all_latest_kpis",
+      "digital_twin_world_state_worldstate_get_kpi_history",
+      "digital_twin_world_state_worldstate_get_topology",
+      "digital_twin_world_state_worldstate_init",
+      "digital_twin_world_state_worldstate_push_kpi",
+      "digital_twin_world_state_worldstate_snapshot"
+    ],
+    "9": [
+      "root_cause_correlator_detect_pattern",
+      "root_cause_correlator_rationale_71",
+      "root_cause_hypothesis_tree_build_hypothesis_tree",
+      "root_cause_hypothesis_tree_build_verification_checks",
+      "root_cause_hypothesis_tree_rationale_1",
+      "root_cause_hypothesis_tree_rationale_39",
+      "shared_schemas_hypothesis",
+      "tests_unit_test_root_cause_py",
+      "unit_test_root_cause_rationale_1",
+      "unit_test_root_cause_snap",
+      "unit_test_root_cause_testbuildhypothesistree",
+      "unit_test_root_cause_testbuildhypothesistree_test_backhaul_produces_h2",
+      "unit_test_root_cause_testbuildhypothesistree_test_congestion_produces_h1",
+      "unit_test_root_cause_testbuildhypothesistree_test_empty_pattern_returns_unknown_hypothesis",
+      "unit_test_root_cause_testbuildhypothesistree_test_energy_saving_failure_detected",
+      "unit_test_root_cause_testbuildhypothesistree_test_hypotheses_sorted_by_confidence",
+      "unit_test_root_cause_testdetectpattern",
+      "unit_test_root_cause_testdetectpattern_test_backhaul_pattern",
+      "unit_test_root_cause_testdetectpattern_test_congestion_pattern",
+      "unit_test_root_cause_testdetectpattern_test_empty_kpis",
+      "unit_test_root_cause_testdetectpattern_test_mobility_storm_pattern"
+    ],
+    "10": [
+      "orchestrator_langgraph_runner_handle_network_event",
+      "orchestrator_langgraph_runner_health",
+      "orchestrator_langgraph_runner_lifespan",
+      "orchestrator_langgraph_runner_log_pipeline_result",
+      "orchestrator_langgraph_runner_make_serialisable",
+      "orchestrator_langgraph_runner_rationale_1",
+      "orchestrator_langgraph_runner_rationale_122",
+      "orchestrator_langgraph_runner_rationale_139",
+      "orchestrator_langgraph_runner_rationale_167",
+      "orchestrator_langgraph_runner_rationale_180",
+      "orchestrator_langgraph_runner_rationale_50",
+      "orchestrator_langgraph_runner_rationale_92",
+      "orchestrator_langgraph_runner_run_pipeline",
+      "orchestrator_langgraph_runner_seed_kpi",
+      "orchestrator_langgraph_runner_serialise_state",
+      "services_ai_agent_orchestrator_langgraph_runner_py",
+      "services_ai_agent_shared_event_bus_py",
+      "shared_event_bus_poll_kpis_from_twin",
+      "shared_event_bus_rationale_1",
+      "shared_event_bus_rationale_53",
+      "shared_memory_store_store_kpi"
+    ],
+    "11": [
+      "executor_action_runner_call_actuator",
+      "executor_action_runner_rationale_1",
+      "executor_agent_executor_node",
+      "executor_agent_rationale_1",
+      "executor_audit_log_rationale_1",
+      "executor_audit_log_write_audit",
+      "executor_idempotency_get_existing_change",
+      "executor_idempotency_rationale_1",
+      "executor_idempotency_store_change",
+      "services_ai_agent_executor_action_runner_py",
+      "services_ai_agent_executor_agent_py",
+      "services_ai_agent_executor_audit_log_py",
+      "services_ai_agent_executor_idempotency_py",
+      "services_ai_agent_shared_redis_client_py",
+      "shared_redis_client_get_redis",
+      "shared_redis_client_get_value",
+      "shared_redis_client_rationale_1",
+      "shared_redis_client_set_value",
+      "shared_schemas_changeconfirmation"
+    ],
+    "12": [
+      "digital_twin_event_generator_eventgenerator_check_backhaul",
+      "digital_twin_event_generator_eventgenerator_check_congestion",
+      "digital_twin_event_generator_eventgenerator_check_mobility",
+      "digital_twin_event_generator_eventgenerator_check_outage",
+      "digital_twin_event_generator_eventgenerator_check_signal",
+      "digital_twin_event_generator_eventgenerator_congestion_severity",
+      "digital_twin_event_generator_eventgenerator_emit",
+      "digital_twin_event_generator_eventgenerator_evaluate",
+      "digital_twin_event_generator_eventgenerator_get_events_for_entity",
+      "digital_twin_event_generator_eventgenerator_get_recent_events",
+      "digital_twin_event_generator_eventgenerator_init",
+      "digital_twin_event_generator_eventgenerator_make_event",
+      "digital_twin_event_generator_rationale_1",
+      "digital_twin_event_generator_rationale_44",
+      "services_digital_twin_event_generator_py"
+    ],
+    "13": [
+      "data_kafka_schemas_aura_event_v1_json",
+      "schemas_aura_event_v1_properties",
+      "schemas_aura_event_v1_properties_entity_id",
+      "schemas_aura_event_v1_properties_event_id",
+      "schemas_aura_event_v1_properties_event_type",
+      "schemas_aura_event_v1_properties_evidence",
+      "schemas_aura_event_v1_properties_severity",
+      "schemas_aura_event_v1_properties_sim_time_s",
+      "schemas_aura_event_v1_properties_ts",
+      "schemas_aura_event_v1_required",
+      "schemas_aura_event_v1_schema",
+      "schemas_aura_event_v1_severity_enum",
+      "schemas_aura_event_v1_title",
+      "schemas_aura_event_v1_ts_format",
+      "schemas_aura_event_v1_type"
+    ],
+    "14": [
+      "orchestrator_graph_build_graph",
+      "orchestrator_graph_rationale_1",
+      "orchestrator_graph_rationale_101",
+      "orchestrator_graph_rationale_58",
+      "orchestrator_graph_rationale_68",
+      "orchestrator_graph_rationale_78",
+      "orchestrator_graph_should_continue_after_rca",
+      "orchestrator_graph_should_continue_after_safety",
+      "services_ai_agent_orchestrator_graph_py"
+    ],
+    "15": [
+      "safety_agent_rationale_1",
+      "safety_agent_safety_node",
+      "safety_blast_radius_compute_blast_radius",
+      "safety_blast_radius_rationale_1",
+      "safety_rate_limiter_rationale_1",
+      "safety_rate_limiter_recent_change_count",
+      "services_ai_agent_safety_agent_py",
+      "services_ai_agent_safety_blast_radius_py",
+      "services_ai_agent_safety_rate_limiter_py"
+    ],
+    "16": [
+      "opencode_json",
+      "orion_opencode_code_review_graph_args",
+      "orion_opencode_code_review_graph_command",
+      "orion_opencode_code_review_graph_cwd",
+      "orion_opencode_code_review_graph_env",
+      "orion_opencode_code_review_graph_type",
+      "orion_opencode_mcpservers",
+      "orion_opencode_mcpservers_code_review_graph"
+    ],
+    "17": [
+      "docs_runbooks_local-dev",
+      "docs_scenarios_backhaul_degradation",
+      "docs_scenarios_energy_saving_failure",
+      "docs_scenarios_evening_congestion",
+      "docs_scenarios_mobility_storm",
+      "fault_injection_evening_congestion_rationale_1",
+      "fault_injection_evening_congestion_rationale_9",
+      "tree_txt_"
+    ],
+    "18": [
+      "mcp_json",
+      "orion_mcp_code_review_graph_args",
+      "orion_mcp_code_review_graph_command",
+      "orion_mcp_code_review_graph_cwd",
+      "orion_mcp_code_review_graph_type",
+      "orion_mcp_mcpservers",
+      "orion_mcp_mcpservers_code_review_graph"
+    ],
+    "19": [
+      "orion_pyrightconfig_exclude",
+      "orion_pyrightconfig_extrapaths",
+      "orion_pyrightconfig_pythonplatform",
+      "orion_pyrightconfig_pythonversion",
+      "pyrightconfig_json"
+    ],
+    "20": [
+      "agents_md_mcp_tools",
+      "claude_md_mcp_tools",
+      "gemini_md_mcp_tools",
+      "qoder_md_mcp_tools"
+    ],
+    "21": [
+      "api-gateway_requirements",
+      "collector_requirements",
+      "digital-twin_requirements",
+      "influxdb.yml"
+    ],
+    "22": [
+      "api_gateway_auth_rationale_1",
+      "services_api_gateway_auth_py",
+      "services_api_gateway_rbac_py"
+    ],
+    "23": [
+      "api_gateway_main_health",
+      "api_gateway_main_rationale_1",
+      "services_api_gateway_main_py"
+    ],
+    "24": [
+      "collector_http_ingestor_rationale_1",
+      "services_collector_http_ingestor_py",
+      "services_collector_mqtt_ingestor_py"
+    ],
+    "25": [
+      "planner_whatif_engine_rationale_1",
+      "planner_whatif_engine_run_whatif",
+      "services_ai_agent_planner_whatif_engine_py"
+    ],
+    "26": [
+      "collector_main_health",
+      "collector_main_rationale_1",
+      "services_collector_main_py"
+    ],
+    "27": [
+      "actuator_rollback_rationale_1",
+      "services_actuator_rollback_py"
+    ],
+    "28": [
+      "c_users_mrben_documents_github_orion_data_timeseries_influxdb_init_sh__entry",
+      "data_timeseries_influxdb_init_sh"
+    ],
+    "29": [
+      "c_users_mrben_documents_github_orion_data_kafka_topics_sh__entry",
+      "data_kafka_topics_sh"
+    ],
+    "30": [
+      "executor_init_rationale_1",
+      "services_ai_agent_executor_init_py"
+    ],
+    "31": [
+      "infra_docker-compose_override_yml_collector",
+      "infra_prometheus_yml_collector"
+    ],
+    "32": [
+      "infra_docker-compose_override_yml_digital-twin",
+      "infra_prometheus_yml_digital-twin"
+    ],
+    "33": [
+      "infra_docker-compose_override_yml_actuator",
+      "infra_prometheus_yml_actuator"
+    ],
+    "34": [
+      "infra_docker-compose_override_yml_api-gateway",
+      "infra_prometheus_yml_api-gateway"
+    ],
+    "35": [
+      "planner_init_rationale_1",
+      "services_ai_agent_planner_init_py"
+    ],
+    "36": [
+      "safety_init_rationale_1",
+      "services_ai_agent_safety_init_py"
+    ],
+    "37": [
+      "c_users_mrben_documents_github_orion_scaffold_sh__entry",
+      "scaffold_sh"
+    ],
+    "38": [
+      "actuator_change_record_rationale_1",
+      "services_actuator_change_record_py"
+    ],
+    "39": [
+      "actuator_handover_tuner_rationale_1",
+      "services_actuator_handover_tuner_py"
+    ],
+    "40": [
+      "services_actuator_requirements_txt_asyncpg",
+      "services_ai-agent_requirements_txt_asyncpg_2"
+    ],
+    "41": [
+      "services_actuator_requirements_txt_fastapi",
+      "services_ai-agent_requirements_txt_fastapi"
+    ],
+    "42": [
+      "services_actuator_requirements_txt_pydantic",
+      "services_ai-agent_requirements_txt_pydantic_2"
+    ],
+    "43": [
+      "services_actuator_requirements_txt_python_dotenv",
+      "services_ai-agent_requirements_txt_python_dotenv_2"
+    ],
+    "44": [
+      "services_actuator_requirements_txt_uvicorn",
+      "services_ai-agent_requirements_txt_uvicorn_2"
+    ],
+    "45": [
+      "actuator_slice_policy_rationale_1",
+      "services_actuator_slice_policy_py"
+    ],
+    "46": [
+      "services_actuator_requirements_txt_httpx",
+      "services_ai-agent_requirements_txt_httpx_2"
+    ],
+    "47": [
+      "services_actuator_requirements_txt_redis",
+      "services_ai-agent_requirements_txt_redis_2"
+    ],
+    "48": [
+      "orchestrator_handoff_rationale_1",
+      "services_ai_agent_orchestrator_handoff_py"
+    ],
+    "49": [
+      "api_gateway_routes_rationale_1",
+      "services_api_gateway_routes_py"
+    ],
+    "50": [
+      "collector_kafka_consumer_rationale_1",
+      "services_collector_kafka_consumer_py"
+    ],
+    "51": [
+      "digital_twin_topology_rationale_1",
+      "services_digital_twin_topology_py"
+    ],
+    "52": [
+      "services_ai_agent_verifier_init_py",
+      "verifier_init_rationale_1"
+    ],
+    "53": [
+      "run_ai_agent_test_py"
+    ],
+    "54": [
+      "tmp_ai_run_test_py"
+    ],
+    "55": [
+      "digital_twin_fault_injector_rationale_33"
+    ],
+    "56": [
+      "digital_twin_fault_injector_rationale_46"
+    ],
+    "57": [
+      "digital_twin_fault_injector_rationale_60"
+    ],
+    "58": [
+      "digital_twin_fault_injector_rationale_67"
+    ],
+    "59": [
+      "digital_twin_fault_injector_rationale_76"
+    ],
+    "60": [
+      "docker-compose_yml_services"
+    ],
+    "61": [
+      "docs_scenarios_policy_misconfiguration"
+    ],
+    "62": [
+      "infra_docker-compose_override_yml_ai-agent"
+    ],
+    "63": [
+      "services_ai-agent_requirements_txt_langchain"
+    ],
+    "64": [
+      "services_ai-agent_requirements_txt_langgraph"
+    ],
+    "65": [
+      "services_ai-agent_requirements_txt_langchain_core"
+    ],
+    "66": [
+      "services_ai-agent_requirements_txt_langchain_ollama"
+    ],
+    "67": [
+      "services_ai-agent_requirements_txt_aiokafka"
+    ],
+    "68": [
+      "services_ai-agent_requirements_txt_influxdb_client"
+    ]
+  },
+  "cohesion": {
+    "0": 0.05314685314685315,
+    "1": 0.08879492600422834,
+    "2": 0.0641025641025641,
+    "3": 0.0641025641025641,
+    "4": 0.09666666666666666,
+    "5": 0.15584415584415584,
+    "6": 0.14285714285714285,
+    "7": 0.18571428571428572,
+    "8": 0.14285714285714285,
+    "9": 0.16666666666666666,
+    "10": 0.11428571428571428,
+    "11": 0.1286549707602339,
+    "12": 0.24761904761904763,
+    "13": 0.20952380952380953,
+    "14": 0.2222222222222222,
+    "15": 0.2222222222222222,
+    "16": 0.25,
+    "17": 0.25,
+    "18": 0.2857142857142857,
+    "19": 0.4,
+    "20": 1.0,
+    "21": 0.8333333333333334,
+    "22": 0.6666666666666666,
+    "23": 0.6666666666666666,
+    "24": 0.6666666666666666,
+    "25": 0.6666666666666666,
+    "26": 0.6666666666666666,
+    "27": 1.0,
+    "28": 1.0,
+    "29": 1.0,
+    "30": 1.0,
+    "31": 1.0,
+    "32": 1.0,
+    "33": 1.0,
+    "34": 1.0,
+    "35": 1.0,
+    "36": 1.0,
+    "37": 1.0,
+    "38": 1.0,
+    "39": 1.0,
+    "40": 1.0,
+    "41": 1.0,
+    "42": 1.0,
+    "43": 1.0,
+    "44": 1.0,
+    "45": 1.0,
+    "46": 1.0,
+    "47": 1.0,
+    "48": 1.0,
+    "49": 1.0,
+    "50": 1.0,
+    "51": 1.0,
+    "52": 1.0,
+    "53": 1.0,
+    "54": 1.0,
+    "55": 1.0,
+    "56": 1.0,
+    "57": 1.0,
+    "58": 1.0,
+    "59": 1.0,
+    "60": 1.0,
+    "61": 1.0,
+    "62": 1.0,
+    "63": 1.0,
+    "64": 1.0,
+    "65": 1.0,
+    "66": 1.0,
+    "67": 1.0,
+    "68": 1.0
+  },
+  "gods": [
+    {
+      "id": "digital_twin_world_state_worldstate",
+      "label": "WorldState",
+      "degree": 30
+    },
+    {
+      "id": "digital_twin_mobility_mobilityprocess",
+      "label": "MobilityProcess",
+      "degree": 15
+    },
+    {
+      "id": "triage_agent_triage_node",
+      "label": "triage_node()",
+      "degree": 14
+    },
+    {
+      "id": "root_cause_agent_root_cause_node",
+      "label": "root_cause_node()",
+      "degree": 13
+    },
+    {
+      "id": "shared_schemas_kpisnapshot",
+      "label": "KPISnapshot",
+      "degree": 12
+    },
+    {
+      "id": "unit_test_triage_classifier_testclassifyfromevent",
+      "label": "TestClassifyFromEvent",
+      "degree": 11
+    },
+    {
+      "id": "unit_test_triage_classifier_testclassifyfromkpis",
+      "label": "TestClassifyFromKPIs",
+      "degree": 11
+    },
+    {
+      "id": "shared_event_bus_eventbus",
+      "label": "EventBus",
+      "degree": 10
+    },
+    {
+      "id": "digital_twin_main_whatifrequest",
+      "label": "WhatIfRequest",
+      "degree": 10
+    },
+    {
+      "id": "digital_twin_main_slicepolicyrequest",
+      "label": "SlicePolicyRequest",
+      "degree": 10
+    }
+  ],
+  "surprises": [
+    {
+      "source": "MCP Tools: code-review-graph",
+      "target": "MCP Tools: code-review-graph",
+      "source_files": [
+        "AGENTS.md",
+        "CLAUDE.md"
+      ],
+      "confidence": "INFERRED",
+      "relation": "semantically_similar_to",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; semantically similar concepts with no structural link"
+    },
+    {
+      "source": "MCP Tools: code-review-graph",
+      "target": "MCP Tools: code-review-graph",
+      "source_files": [
+        "AGENTS.md",
+        "GEMINI.md"
+      ],
+      "confidence": "INFERRED",
+      "relation": "semantically_similar_to",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; semantically similar concepts with no structural link"
+    },
+    {
+      "source": "MCP Tools: code-review-graph",
+      "target": "MCP Tools: code-review-graph",
+      "source_files": [
+        "AGENTS.md",
+        "QODER.md"
+      ],
+      "confidence": "INFERRED",
+      "relation": "semantically_similar_to",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; semantically similar concepts with no structural link"
+    },
+    {
+      "source": "MCP Tools: code-review-graph",
+      "target": "MCP Tools: code-review-graph",
+      "source_files": [
+        "CLAUDE.md",
+        "GEMINI.md"
+      ],
+      "confidence": "INFERRED",
+      "relation": "semantically_similar_to",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; semantically similar concepts with no structural link"
+    },
+    {
+      "source": "MCP Tools: code-review-graph",
+      "target": "MCP Tools: code-review-graph",
+      "source_files": [
+        "CLAUDE.md",
+        "QODER.md"
+      ],
+      "confidence": "INFERRED",
+      "relation": "semantically_similar_to",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; semantically similar concepts with no structural link"
+    }
+  ],
+  "tokens": {
+    "input": 0,
+    "output": 0
+  }
+}
