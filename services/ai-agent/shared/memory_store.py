@@ -26,6 +26,9 @@ _kpi_store: Dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
 _incident_store: Dict[str, IncidentRecord] = {}
 _lock = asyncio.Lock()
 
+# entity_id → incident_type being actively processed (dedup guard)
+_in_flight: Dict[str, str] = {}
+
 
 # ── KPI helpers ───────────────────────────────────────────────────────────────
 
@@ -64,6 +67,42 @@ async def find_incident_by_correlation(correlation_id: str) -> Optional[Incident
             if record.correlation_id == correlation_id:
                 return record
     return None
+
+
+async def find_active_incident_by_entity(
+    entity_id: str, incident_type: str, window_seconds: int = 300
+) -> Optional[IncidentRecord]:
+    """Return active incident for same entity+type created within window_seconds."""
+    from datetime import timezone
+    import datetime as _dt
+    now = _dt.datetime.now(timezone.utc)
+    async with _lock:
+        for record in _incident_store.values():
+            if record.incident_type.value != incident_type:
+                continue
+            if entity_id not in record.affected_entities:
+                continue
+            age = (now - record.created_at.replace(tzinfo=timezone.utc)
+                   if record.created_at.tzinfo is None
+                   else now - record.created_at)
+            if age.total_seconds() <= window_seconds:
+                return record
+    return None
+
+
+async def claim_entity_processing(entity_id: str, incident_type: str) -> bool:
+    """Atomically claim processing rights for entity+type. Returns True if claimed, False if already claimed."""
+    async with _lock:
+        key = f"{entity_id}:{incident_type}"
+        if key in _in_flight:
+            return False
+        _in_flight[key] = incident_type
+        return True
+
+
+async def release_entity_processing(entity_id: str, incident_type: str) -> None:
+    async with _lock:
+        _in_flight.pop(f"{entity_id}:{incident_type}", None)
 
 
 async def all_incidents() -> List[IncidentRecord]:
