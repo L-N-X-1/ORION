@@ -142,31 +142,6 @@ async def triage_node(state: Dict[str, Any]) -> Dict[str, Any]:
         pipeline.incident_record = enriched
         return pipeline.model_dump()
 
-    # Suppress storm: check stored incidents AND in-flight pipelines for same entity+type
-    incident_type_hint = classify_from_event(event)
-    active = await find_active_incident_by_entity(
-        event.entity_id, incident_type_hint.value, window_seconds=300
-    )
-    if active:
-        log.info(
-            "SUPPRESSED (stored) — active incident %s for entity=%s type=%s",
-            active.incident_id, event.entity_id, incident_type_hint.value,
-        )
-        pipeline.pipeline_halted = True
-        pipeline.halt_reason = f"Suppressed: active incident {active.incident_id} already handling {event.entity_id}"
-        return pipeline.model_dump()
-
-    # Atomic claim — prevents concurrent pipelines racing before first stores incident
-    claimed = await claim_entity_processing(event.entity_id, incident_type_hint.value)
-    if not claimed:
-        log.info(
-            "SUPPRESSED (in-flight) — pipeline already processing entity=%s type=%s",
-            event.entity_id, incident_type_hint.value,
-        )
-        pipeline.pipeline_halted = True
-        pipeline.halt_reason = f"Suppressed: concurrent pipeline already handling {event.entity_id}"
-        return pipeline.model_dump()
-
     # ── Step 2: Classify incident type ───────────────────────────────────────
     incident_type = classify_from_event(event)
 
@@ -227,10 +202,8 @@ async def triage_node(state: Dict[str, Any]) -> Dict[str, Any]:
             record = record.model_copy(update={"ticket_id": ticket_id})
             log.info("Opened ticket %s for incident %s", ticket_id, record.incident_id)
 
-    # ── Step 10: Persist and hand off ────────────────────────────────────────
+    # ── Step 10: Persist and release claim ───────────────────────────────────
     await store_incident(record)
-    # Release claim — future events for same entity will now find stored incident
-    await release_entity_processing(event.entity_id, incident_type_hint.value)
     log.info(
         "IncidentRecord %s created [%s / %s] — %d affected entities",
         record.incident_id,
