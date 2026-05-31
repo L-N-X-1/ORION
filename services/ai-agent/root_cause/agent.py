@@ -26,8 +26,10 @@ building, topology traversal) are deterministic Python.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -74,6 +76,83 @@ Guidelines:
 - Do not recommend remediation actions (that is the Planner Agent's role).
 - State the confidence level (e.g., "high confidence", "medium confidence").
 """
+
+
+_RERANK_SYSTEM_PROMPT = """\
+You are a 5G network root-cause analysis expert.
+Given a list of hypotheses with deterministic confidence scores and the latest KPI snapshot,
+adjust confidence scores if the KPI evidence strongly supports or contradicts a hypothesis.
+
+Respond with valid JSON only:
+{
+  "adjustments": {"<hypothesis_label>": <float delta, e.g. +0.15 or -0.10>, ...},
+  "reasoning": "<one sentence>"
+}
+
+Rules:
+- Only adjust when KPI evidence clearly changes the picture.
+- Keep absolute confidence between 0.05 and 0.95 after adjustment.
+- If uncertain, output empty adjustments: {}.
+"""
+
+
+async def _llm_adjust_hypotheses(
+    hypotheses: List[Any],
+    kpis_by_entity: Dict[str, List[Any]],
+    pattern: Dict[str, Any],
+) -> List[Any]:
+    """
+    LLM reviews deterministic hypotheses and may adjust confidence scores.
+    Falls back to original list if LLM fails or returns invalid JSON.
+    """
+    hyp_summary = [
+        {"label": h.label, "confidence": h.confidence, "description": h.description}
+        for h in hypotheses
+    ]
+    kpi_snapshot: Dict[str, Any] = {}
+    for eid, snaps in kpis_by_entity.items():
+        if snaps:
+            s = snaps[-1]
+            kpi_snapshot[eid] = {
+                "prb": round(s.prb_utilization, 1),
+                "latency_ms": round(s.latency_p95_ms, 1),
+                "ho_fail": round(s.ho_fail_rate, 3),
+                "sla_violation": s.sla_violation,
+                "energy_mode": s.energy_mode,
+            }
+
+    prompt = (
+        f"Pattern detected: congestion_cells={pattern.get('congestion_cells', [])}, "
+        f"backhaul_cells={pattern.get('backhaul_cells', [])}, "
+        f"mobility_cells={pattern.get('mobility_storm_cells', [])}\n\n"
+        f"Hypotheses:\n{json.dumps(hyp_summary, indent=2)}\n\n"
+        f"Latest KPI snapshot:\n{json.dumps(kpi_snapshot, indent=2)}\n\n"
+        "Adjust confidence scores if warranted, respond with JSON only:"
+    )
+
+    try:
+        resp = await _llm.ainvoke(
+            [SystemMessage(content=_RERANK_SYSTEM_PROMPT), HumanMessage(content=prompt)]
+        )
+        log.info("LLM hypothesis adjustment raw: %s", resp.content[:300])
+        match = re.search(r"\{.*\}", resp.content, re.DOTALL)
+        if match:
+            parsed = json.loads(match.group())
+            adjustments: Dict[str, float] = parsed.get("adjustments", {})
+            reasoning = parsed.get("reasoning", "")
+            if adjustments:
+                log.info("LLM hypothesis adjustments: %s — %s", adjustments, reasoning)
+                for h in hypotheses:
+                    delta = adjustments.get(h.label, 0.0)
+                    if delta:
+                        h.confidence = round(min(0.95, max(0.05, h.confidence + delta)), 2)
+                hypotheses.sort(key=lambda h: h.confidence, reverse=True)
+                for i, h in enumerate(hypotheses, start=1):
+                    h.rank = i
+    except Exception as exc:
+        log.warning("LLM hypothesis adjustment failed (%s) — keeping original ranking", exc)
+
+    return hypotheses
 
 
 async def _generate_rca_summary(
@@ -195,6 +274,15 @@ async def root_cause_node(state: Dict[str, Any]) -> Dict[str, Any]:
         topology=primary_topo,
         incident_type=incident.incident_type,
     )
+    # ── Step 4b: LLM confidence adjustment (fallback: original ranking) ──────────
+    adjusted_hypotheses = await _llm_adjust_hypotheses(
+        hypothesis_tree.hypotheses, kpis_by_entity, pattern
+    )
+    hypothesis_tree = hypothesis_tree.model_copy(update={
+        "hypotheses": adjusted_hypotheses,
+        "dominant_root": adjusted_hypotheses[0],
+    })
+
     dominant = hypothesis_tree.dominant_root
     log.info(
         "Dominant hypothesis: %s (confidence=%.2f)",

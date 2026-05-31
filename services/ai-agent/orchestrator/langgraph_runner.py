@@ -21,26 +21,180 @@ import asyncio
 import json
 import logging
 import os
+import re
+import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from langchain_core.messages import HumanMessage, SystemMessage  # type: ignore[import-untyped]
+from langchain_ollama import ChatOllama  # type: ignore[import-untyped]
 from langgraph.types import Command
 
 from orchestrator.graph import pipeline
 from shared.event_bus import EventBus, poll_kpis_from_twin
-from shared.memory_store import store_kpi
+from shared.memory_store import (
+    claim_entity_processing,
+    find_active_incident_by_entity,
+    release_entity_processing,
+    store_kpi,
+)
 from shared.redis_client import get_value
-from shared.schemas import ApprovalDecisionRequest, KPISnapshot, NetworkEvent
+from shared.schemas import ApprovalDecisionRequest, IncidentType, KPISnapshot, NetworkEvent
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+# ── Anomaly detection setup ───────────────────────────────────────────────────
+
+# All cell IDs in the 3×4 topology
+_ALL_CELLS = [f"C{r}{c}" for r in range(3) for c in range(4)]
+
+_ANOMALY_INTERVAL_S = int(os.getenv("ANOMALY_INTERVAL_S", "30"))
+
+_anomaly_llm = ChatOllama(
+    model=os.getenv("OLLAMA_MODEL", "llama3.2"),
+    temperature=0,
+    base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+)
+
+_ANOMALY_SYSTEM_PROMPT = """\
+You are a 5G network anomaly detector.
+Analyze the last few KPI ticks for a single cell and decide if the trend is
+likely to breach alerting thresholds within the next 2-3 ticks.
+
+Respond with valid JSON only:
+{"anomaly": true/false, "reason": "<one sentence>"}
+
+Set anomaly=true only when you see a clear rising trend in PRB, sustained
+latency increase, growing HO failure rate, or SLA violations starting.
+"""
+
+
+async def _llm_anomaly_check(cell_id: str, kpis: List[KPISnapshot]) -> bool:
+    """Returns True if LLM detects an early anomaly trend. False on failure."""
+    ticks = [
+        {
+            "tick": i + 1,
+            "prb": round(k.prb_utilization, 1),
+            "latency_ms": round(k.latency_p95_ms, 1),
+            "ho_fail": round(k.ho_fail_rate, 3),
+            "sla_violation": k.sla_violation,
+        }
+        for i, k in enumerate(kpis)
+    ]
+    prompt = (
+        f"Cell: {cell_id}\n"
+        f"KPI ticks (oldest→newest):\n{json.dumps(ticks, indent=2)}\n\n"
+        "Is this trend anomalous? Respond with JSON only:"
+    )
+    try:
+        resp = await _anomaly_llm.ainvoke(
+            [SystemMessage(content=_ANOMALY_SYSTEM_PROMPT), HumanMessage(content=prompt)]
+        )
+        match = re.search(r"\{[^{}]*\}", resp.content, re.DOTALL)
+        if match:
+            parsed = json.loads(match.group())
+            result = bool(parsed.get("anomaly", False))
+            if result:
+                log.info(
+                    "Anomaly LLM flagged %s: %s", cell_id, parsed.get("reason", "")
+                )
+            return result
+    except Exception as exc:
+        log.debug("Anomaly LLM check failed for %s: %s", cell_id, exc)
+    return False
+
+
+async def _check_anomalies() -> None:
+    """Check all cells for early-warning trends; fire synthetic events if found."""
+    for cell_id in _ALL_CELLS:
+        try:
+            from shared.memory_store import get_recent_kpis
+
+            kpis = await get_recent_kpis(cell_id, n=5)
+            if len(kpis) < 3:
+                continue
+
+            latest_prb = kpis[-1].prb_utilization
+            # Skip cells already at threshold (event_generator handles those)
+            # or too low to be interesting
+            if latest_prb >= 92 or latest_prb < 65:
+                continue
+
+            # Skip if active CONGESTION incident already open for this cell
+            active = await find_active_incident_by_entity(
+                cell_id, IncidentType.CONGESTION.value, window_seconds=300
+            )
+            if active:
+                continue
+
+            # ── LLM check (primary) ──────────────────────────────────────────
+            flagged = await _llm_anomaly_check(cell_id, kpis)
+
+            # ── Deterministic fallback: PRB > 78% and strictly rising 3+ ticks
+            if not flagged:
+                prb_vals = [k.prb_utilization for k in kpis[-3:]]
+                if (
+                    prb_vals[-1] > 78
+                    and all(prb_vals[i] < prb_vals[i + 1] for i in range(len(prb_vals) - 1))
+                ):
+                    flagged = True
+                    log.info(
+                        "Anomaly deterministic fallback flagged %s (PRB=%.1f%%, rising)",
+                        cell_id, latest_prb,
+                    )
+
+            if not flagged:
+                continue
+
+            # Claim processing slot — prevents race with Kafka events
+            claimed = await claim_entity_processing(
+                cell_id, IncidentType.CONGESTION.value
+            )
+            if not claimed:
+                continue
+
+            event_id = f"anomaly-{uuid.uuid4().hex[:8]}"
+            event = NetworkEvent(
+                event_id=event_id,
+                correlation_id=event_id,
+                event_type="CONGESTION",
+                entity_id=cell_id,
+                severity_hint="medium",
+                sim_time_s=0.0,
+                timestamp=datetime.now(timezone.utc),
+                extra={"source": "anomaly_detector", "prb": latest_prb},
+            )
+            log.info(
+                "Anomaly detector firing early-warning event for %s (PRB=%.1f%%)",
+                cell_id, latest_prb,
+            )
+            # Release claim before pipeline runs — triage will re-claim via its own guard
+            await release_entity_processing(cell_id, IncidentType.CONGESTION.value)
+            asyncio.create_task(handle_network_event(event))
+
+        except Exception as exc:
+            log.warning("Anomaly check error for %s: %s", cell_id, exc)
+
+
+async def _anomaly_detection_loop() -> None:
+    """Background loop: scan KPI trends every ANOMALY_INTERVAL_S seconds."""
+    await asyncio.sleep(45)  # wait for KPI poller to populate memory store
+    log.info("Anomaly detection loop started (interval=%ds)", _ANOMALY_INTERVAL_S)
+    while True:
+        await asyncio.sleep(_ANOMALY_INTERVAL_S)
+        try:
+            await _check_anomalies()
+        except Exception as exc:
+            log.warning("Anomaly detection loop error: %s", exc)
+
 
 # ── Event bus setup ───────────────────────────────────────────────────────────
 
@@ -109,6 +263,7 @@ async def lifespan(app: FastAPI):
     bus.on_event(handle_network_event)
     _bus_task = asyncio.create_task(bus.start())
     asyncio.create_task(poll_kpis_from_twin())
+    asyncio.create_task(_anomaly_detection_loop())
     log.info("AI Agent service started — listening for network events")
     yield
     # Shutdown

@@ -152,6 +152,7 @@ class ActionPlan(BaseModel):
     candidate_alternatives: List[CandidateAction] = Field(default_factory=list)
     delta_forecast: Dict[str, Any] = Field(default_factory=dict)
     approval_required: bool = False
+    rationale: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -198,6 +199,7 @@ class VerificationReport(BaseModel):
     rollback_triggered: bool = False
     final_sla_state: bool = False          # True = SLA met
     postmortem_url: Optional[str] = None
+    postmortem: str = ""                   # full LLM-generated report text
     verified_at: datetime = Field(default_factory=datetime.utcnow)
 
 
