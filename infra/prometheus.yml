@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: digital-twin
+    static_configs:
+      - targets: ['digital-twin:8001']
+  - job_name: collector
+    static_configs:
+      - targets: ['collector:8002']
+  - job_name: actuator
+    static_configs:
+      - targets: ['actuator:8003']
+  - job_name: api-gateway
+    static_configs:
+      - targets: ['api-gateway:8000']
