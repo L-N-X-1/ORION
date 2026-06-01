@@ -92,7 +92,7 @@ async def find_active_incident_by_entity(
 
 
 async def claim_entity_processing(entity_id: str, incident_type: str) -> bool:
-    """Atomically claim processing rights for entity+type. Returns True if claimed, False if already claimed."""
+    """Atomically claim processing slot for entity+type. Returns False if already claimed."""
     async with _lock:
         key = f"{entity_id}:{incident_type}"
         if key in _in_flight:
