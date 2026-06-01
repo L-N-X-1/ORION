@@ -73,13 +73,8 @@ async def find_active_incident_by_entity(
     entity_id: str, incident_type: str, window_seconds: int = 300
 ) -> Optional[IncidentRecord]:
     """Return active incident for same entity+type created within window_seconds."""
-<<<<<<< HEAD
-    from datetime import timezone
-    import datetime as _dt
-=======
     import datetime as _dt
     from datetime import timezone
->>>>>>> 8af57e9 (feat(AN-AGT-003): made the llm more responsive and makes decision instead of just describing what s happening)
     now = _dt.datetime.now(timezone.utc)
     async with _lock:
         for record in _incident_store.values():
@@ -87,28 +82,17 @@ async def find_active_incident_by_entity(
                 continue
             if entity_id not in record.affected_entities:
                 continue
-<<<<<<< HEAD
-            age = (now - record.created_at.replace(tzinfo=timezone.utc)
-                   if record.created_at.tzinfo is None
-                   else now - record.created_at)
-            if age.total_seconds() <= window_seconds:
-=======
             created = record.created_at
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
             age = (now - created).total_seconds()
             if age <= window_seconds:
->>>>>>> 8af57e9 (feat(AN-AGT-003): made the llm more responsive and makes decision instead of just describing what s happening)
                 return record
     return None
 
 
 async def claim_entity_processing(entity_id: str, incident_type: str) -> bool:
-<<<<<<< HEAD
     """Atomically claim processing rights for entity+type. Returns True if claimed, False if already claimed."""
-=======
-    """Atomically claim processing slot for entity+type. Returns False if already claimed."""
->>>>>>> 8af57e9 (feat(AN-AGT-003): made the llm more responsive and makes decision instead of just describing what s happening)
     async with _lock:
         key = f"{entity_id}:{incident_type}"
         if key in _in_flight:

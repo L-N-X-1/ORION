@@ -189,6 +189,7 @@ async def triage_node(state: Dict[str, Any]) -> Dict[str, Any]:
         pre_incident_baseline=baseline,
         candidate_correlated_entities=correlated_entities,
         summary=summary,
+        incident_id=event.extra.get("suggested_incident_id"),
     )
 
     # ── Step 9: Open ticket for Critical incidents ────────────────────────────

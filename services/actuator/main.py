@@ -202,7 +202,10 @@ async def get_change_snapshot(change_id: str):
     rec = await app.state._pg.fetchrow("SELECT pre_change_kpis FROM change_records WHERE change_id=$1", change_id)
     if not rec:
         raise HTTPException(404, "change not found")
-    return rec["pre_change_kpis"]
+    raw = rec["pre_change_kpis"]
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return raw
 
 
 @app.post("/actions/rollback")
