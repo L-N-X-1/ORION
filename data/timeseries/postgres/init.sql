@@ -12,19 +12,24 @@ CREATE TABLE IF NOT EXISTS incidents (
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     change_id VARCHAR(50),
-    actor VARCHAR(50),
-    action JSONB,
+    incident_id VARCHAR(50),
+    action_type VARCHAR(50),
+    parameters_hash TEXT,
     policy_decision VARCHAR(30),
-    pre_change_snapshot JSONB,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    actor VARCHAR(50),
+    pre_change_kpi_ref TEXT,
+    executed_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS change_records (
-    change_id VARCHAR(50) PRIMARY KEY,
-    parameters JSONB,
-    blast_radius INT,
-    status VARCHAR(20),
+    change_id VARCHAR(20) PRIMARY KEY,
+    incident_id VARCHAR(20) NOT NULL,
+    action_type VARCHAR(50) NOT NULL,
+    parameters JSONB NOT NULL,
+    pre_change_kpis JSONB NOT NULL,
+    status VARCHAR(20) DEFAULT 'applied',
+    sim_time_s FLOAT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );

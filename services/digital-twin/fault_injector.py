@@ -113,5 +113,25 @@ class FaultInjector:
     def restore_evening_congestion(state: "WorldState", cells: list[str] | None = None) -> dict:
         targets = cells or ["C00", "C01", "C10"]
         for cid in targets:
-            state.pinned_loads.pop(cid, None)   # ← release pin
+            state.pinned_loads.pop(cid, None)
         return {"restored": "evening_congestion", "targets": targets}
+
+    # ── Agent-testable scenarios (ephemeral — no pinned load) ────────
+
+    @staticmethod
+    def agent_evening_congestion(state: "WorldState",
+                                 cells: list[str] | None = None) -> dict:
+        """Ephemeral congestion: overrides PRB in KPI synthesis only.
+        Clears automatically when agent applies apply_slice_policy."""
+        targets = cells or ["C00", "C01", "C10"]
+        state.synthetic_faults["evening_congestion"] = {
+            "cells": targets,
+            "prb_override": 0.98,
+        }
+        return {"scenario": "agent_evening_congestion", "targets": targets, "prb_override": 0.98}
+
+    @staticmethod
+    def restore_agent_evening_congestion(state: "WorldState",
+                                         cells: list[str] | None = None) -> dict:
+        state.synthetic_faults.pop("evening_congestion", None)
+        return {"restored": "agent_evening_congestion"}
