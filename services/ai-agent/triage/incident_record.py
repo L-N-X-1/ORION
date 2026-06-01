@@ -31,10 +31,11 @@ def new_incident(
     pre_incident_baseline: List[KPISnapshot],
     candidate_correlated_entities: Optional[List[str]] = None,
     summary: str = "",
+    incident_id: Optional[str] = None,
 ) -> IncidentRecord:
     """Create a fresh IncidentRecord from a NetworkEvent."""
     return IncidentRecord(
-        incident_id=f"INC-{uuid.uuid4().hex[:8].upper()}",
+        incident_id=incident_id or f"INC-{uuid.uuid4().hex[:8].upper()}",
         correlation_id=event.correlation_id,
         incident_type=incident_type,
         severity=severity,

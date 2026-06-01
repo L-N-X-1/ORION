@@ -434,7 +434,8 @@ def inject_agent_fault(req: AgentFaultRequest):
     with _state_lock:
         result = fn(state, **params)
 
-    event_id = f"evt-agent-{uuid.uuid4().hex[:8]}"
+    event_id   = f"evt-agent-{uuid.uuid4().hex[:8]}"
+    incident_id = f"INC-{uuid.uuid4().hex[:8].upper()}"
     targets = result.get("targets", ["C00"])
     event_payload = {
         "event_id":       event_id,
@@ -444,13 +445,15 @@ def inject_agent_fault(req: AgentFaultRequest):
         "severity_hint":  "high",
         "sim_time_s":     state.sim_time_s,
         "timestamp":      datetime.now(timezone.utc).isoformat(),
+        "extra":          {"suggested_incident_id": incident_id},
     }
     threading.Thread(target=_fire_agent_event, args=(event_payload,), daemon=True).start()
     return {
-        "injected":  result,
-        "event_id":  event_id,
-        "agent_url": f"{AGENT_URL}/run",
-        "note":      "Agent pipeline running in background. Check /approvals if human approval required.",
+        "injected":    result,
+        "event_id":    event_id,
+        "incident_id": incident_id,
+        "agent_url":   f"{AGENT_URL}/run",
+        "note":        "Agent pipeline running in background. Check /approvals if human approval required.",
     }
 
 
