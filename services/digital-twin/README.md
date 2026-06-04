@@ -1,4 +1,4 @@
-# AURA-NET Digital Twin
+# ORION Digital Twin
 
 FastAPI service that runs a simulated 5G RAN and exposes REST endpoints for agents, collectors, and observability tools.
 
@@ -278,8 +278,8 @@ Restore sets `energy_mode=ACTIVE`.
 | `TICK_INTERVAL_S` | `5` | Simulation tick interval in seconds |
 | `INFLUXDB_URL` | `` | InfluxDB endpoint (optional) |
 | `INFLUXDB_TOKEN` | `` | InfluxDB auth token |
-| `INFLUXDB_ORG` | `aura-net` | InfluxDB organization |
-| `INFLUXDB_BUCKET` | `aura_net` | InfluxDB bucket |
+| `INFLUXDB_ORG` | `orion` | InfluxDB organization |
+| `INFLUXDB_BUCKET` | `orion` | InfluxDB bucket |
 | `KAFKA_BOOTSTRAP_SERVERS` | `` | Kafka brokers (optional) |
 | `AGENT_URL` | `http://ai-agent:8003` | AI agent service URL |
 | `DATASET_DIR` | `/data/telecom` | Path to load-factor CSVs |
