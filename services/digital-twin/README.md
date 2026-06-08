@@ -283,3 +283,58 @@ Restore sets `energy_mode=ACTIVE`.
 | `KAFKA_BOOTSTRAP_SERVERS` | `` | Kafka brokers (optional) |
 | `AGENT_URL` | `http://ai-agent:8003` | AI agent service URL |
 | `DATASET_DIR` | `/data/telecom` | Path to load-factor CSVs |
+| `SIM_START_TIME` | *(wall clock)* | Simulation start-of-day anchor — `HH:MM` or `HH` (24-hour local time). Omit to auto-align to current wall-clock time at startup. |
+
+---
+
+## Simulation Time Anchoring
+
+### Problem
+
+The digital twin uses CSV traffic data (or a synthetic diurnal curve) that encodes a full 24-hour demand pattern — low load at night, peaks in the morning and evening. Without anchoring, the simulation always starts at **tick 0 = midnight**, regardless of the real time. If you start the service at 18:00 and look at Grafana, the cells show morning off-peak traffic because the simulation is still at hour 0 of its internal clock.
+
+### How It Works
+
+At startup, `DatasetLoader` computes a **tick offset** — the number of ticks that correspond to the configured start hour. Every call to `get_load_factor()` and `is_peak_hour()` applies this offset before indexing into the dataset:
+
+```
+effective_tick = (simulation_tick + tick_offset) % dataset_length
+```
+
+This shifts the simulation's position in the demand curve to match the intended start-of-day hour. The simulation then advances forward from that point normally — no drift, no clock polling after startup.
+
+### Offset Calculation
+
+```
+ticks_per_hour   = 6 intervals/hour × 120 ticks/interval = 720 ticks
+ticks_per_minute = 120 ticks/interval ÷ 10 min/interval  = 12 ticks
+
+tick_offset = hour × 720 + minute × 12
+```
+
+Example: starting at `14:30` → offset = `14 × 720 + 30 × 12 = 10080 + 360 = 10440 ticks`.
+
+### Configuration
+
+**Default — wall clock (recommended for production):**  
+Omit `SIM_START_TIME`. `DatasetLoader` reads `datetime.now()` once at startup and computes the offset automatically. Grafana will immediately show traffic matching the real time of day.
+
+**Override — fixed start hour:**  
+Set `SIM_START_TIME` to replay traffic from a specific point in the demand curve. Useful for testing peak-hour fault scenarios without waiting for the real clock to reach evening.
+
+```bash
+# Start simulation at 08:00 (morning ramp-up)
+SIM_START_TIME=08:00
+
+# Start at 19:00 (evening peak — highest congestion in the synthetic curve)
+SIM_START_TIME=19:00
+
+# Hour-only shorthand (minutes default to :00)
+SIM_START_TIME=19
+```
+
+### Peak Hours
+
+`is_peak_hour()` returns `true` when the offset-adjusted simulation hour falls between **08:00 and 22:00**. The `is_peak` field is written to every KPI record in InfluxDB and Kafka — use it in Grafana to annotate graphs or filter queries.
+
+> **Note:** `is_peak` is a metadata tag only. It does not alter KPI values. Actual traffic shape comes from the dataset demand curve — peak traffic is visible in `prb_util`, `throughput_mbps`, and `latency_p95_ms` because the underlying load values are higher at those hours.
