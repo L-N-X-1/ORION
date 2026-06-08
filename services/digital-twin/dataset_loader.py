@@ -28,6 +28,7 @@ from __future__ import annotations
 import math
 import os
 import random
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -111,6 +112,7 @@ class DatasetLoader:
                 self._use_synthetic(cell_id)
 
         self._expand_to_ticks()
+        self._tick_offset = self._compute_tick_offset()
         self._print_summary()
 
     # ── Mode: per-cell overrides ─────────────────────────────────────
@@ -314,6 +316,44 @@ class DatasetLoader:
                     ticks.append(float(np.clip(base + noise, 0.02, 0.98)))
             self._tick_cache[cell_id] = ticks
 
+    # ── Tick offset (wall-clock or SIM_START_TIME anchor) ─────────────
+
+    def _compute_tick_offset(self) -> int:
+        """Return the tick index corresponding to the simulation start time.
+
+        Priority:
+          1. SIM_START_TIME env var — "HH:MM" or "HH" (24-hour, local time)
+          2. Current wall-clock time (datetime.now())
+
+        Tick offset anchors tick=0 to the configured hour so that
+        get_load_factor(0) returns the load for the start-of-day hour,
+        not midnight.
+        """
+        ticks_per_hour   = 6  * TICKS_PER_INTERVAL   # 720
+        ticks_per_minute = TICKS_PER_INTERVAL // 10  # 12  (10-min intervals)
+
+        raw = os.getenv("SIM_START_TIME", "").strip()
+        if raw:
+            try:
+                if ":" in raw:
+                    h, m = raw.split(":", 1)
+                    hour, minute = int(h), int(m)
+                else:
+                    hour, minute = int(raw), 0
+                print(f"[DatasetLoader] SIM_START_TIME={raw!r} → anchoring at {hour:02d}:{minute:02d}")
+            except ValueError:
+                print(f"[DatasetLoader] Invalid SIM_START_TIME {raw!r}, falling back to wall clock")
+                now = datetime.now()
+                hour, minute = now.hour, now.minute
+        else:
+            now = datetime.now()
+            hour, minute = now.hour, now.minute
+            print(f"[DatasetLoader] Anchoring sim to wall clock: {hour:02d}:{minute:02d}")
+
+        offset = hour * ticks_per_hour + minute * ticks_per_minute
+        print(f"[DatasetLoader] Tick offset = {offset} ticks")
+        return offset
+
     # ── Summary ───────────────────────────────────────────────────────
 
     def _print_summary(self) -> None:
@@ -329,11 +369,11 @@ class DatasetLoader:
         ticks = self._tick_cache.get(cell_id)
         if not ticks:
             return 0.3
-        return ticks[tick % len(ticks)]
+        return ticks[(tick + self._tick_offset) % len(ticks)]
 
     def is_peak_hour(self, tick: int) -> bool:
         ticks_per_day  = 144 * TICKS_PER_INTERVAL
-        tick_in_day    = tick % ticks_per_day
+        tick_in_day    = (tick + self._tick_offset) % ticks_per_day
         ticks_per_hour = 6  * TICKS_PER_INTERVAL
         hour = tick_in_day / ticks_per_hour
         return 8.0 <= hour < 22.0
