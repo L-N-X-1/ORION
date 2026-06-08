@@ -182,11 +182,20 @@ services:
       - TWIN_URL=http://digital-twin:8001
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
 
+  react-app:
+    build: ./ui/dashboard/react-app
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+    networks: [orion]
+
   nginx:
     build: ./ui/nginx
     ports:
       - "80:80"
     depends_on:
+      - react-app
       - api-gateway
       - grafana
     networks: [orion]
