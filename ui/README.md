@@ -8,7 +8,7 @@ React-based management console for the ORION Network Intelligence Platform.
 |---|---|
 | Framework | React 18 + TypeScript |
 | Build tool | Vite 5 |
-| Styling | Tailwind CSS 3 |
+| Styling | Tailwind CSS 3 (class-based dark mode) |
 | Data fetching | TanStack Query 5 (auto-poll every 5 s) |
 | Reverse proxy | Nginx (Docker) / Vite dev proxy (local) |
 
@@ -16,27 +16,43 @@ React-based management console for the ORION Network Intelligence Platform.
 
 | Page | What you can do |
 |---|---|
-| **Dashboard** | Live KPI table, SVG sparkline trends, PRB bar chart by cell, live service health for all services, recent events |
-| **Digital Twin** | Per-cell KPI history bars, inject/restore fault scenarios with correct cell params, tune handover, set energy mode, apply slice policy |
-| **AI Agent** | Trigger LangGraph pipeline, approve/reject human-approval gate (race-condition-free), inspect KPI memory store |
+| **Dashboard** | Per-cell multi-line KPI sparklines, live PRB bar chart, service health cards, recent events feed |
+| **Digital Twin** | Per-cell KPI history bars, inject/restore fault scenarios, tune handover, set energy mode, apply slice policy |
+| **AI Agent** | Inject faults to trigger the LangGraph pipeline, live pending-approvals panel (polls every 5 s), approve/reject human-approval gate, inspect KPI memory store |
 | **Actuator** | Rollback via PostgreSQL or direct twin, apply slice policy / handover / energy mode with audit trail |
+
+## Dark Mode
+
+Toggle button (🌙/☀️) in the header. Applies a `dark` class to `<html>` — all Tailwind `dark:` variants activate and the body background switches to `#030712`.
 
 ## KPI Charts (Dashboard)
 
-Four live SVG sparklines (last 60 data points, one per 5 s poll):
+Seven per-cell SVG sparklines (last 60 data points, one point per 5 s poll). Each cell gets a distinct color; a legend maps cell IDs to colors.
 
-| Chart | Color |
+| Chart | Notes |
 |---|---|
-| Avg PRB Utilization | Red |
-| Avg Throughput (Mbps) | Blue |
-| SLA Violation count | Amber |
-| Avg Latency P95 (ms) | Purple |
+| PRB Utilization (%) | One line per cell; red at > 80% |
+| Throughput (Mbps) | One line per cell |
+| Latency P95 (ms) | One line per cell; amber at > 100 ms |
+| SINR (dB) | One line per cell |
+| HO Fail Rate (%) | One line per cell |
+| Packet Loss (%) | One line per cell |
+| SLA Violations (count) | Aggregate single-line sparkline |
 
-Plus a sorted horizontal bar chart showing PRB% for all 24 cells, color-coded and annotated with SLA breach warnings.
+A sorted horizontal bar chart shows live PRB% for all cells, color-coded and annotated with SLA breach warnings.
+
+## AI Agent Pipeline Flow
+
+1. **Inject Fault & Run Pipeline** button calls `POST /api/twin/fault/inject-agent` on the Digital Twin with the selected scenario.
+2. The Digital Twin injects the fault and fires a Kafka event to the AI Agent.
+3. The AI Agent runs the LangGraph pipeline asynchronously: Triage → RCA → Planner → Safety → [Human Approval] → Executor → Verifier.
+4. If Safety returns `ALLOW_WITH_APPROVAL`, the pipeline pauses and writes an approval request to Redis.
+5. The **Pending Approvals** panel polls `GET /api/agent/approvals/pending` every 5 s and immediately displays any waiting incidents with Approve / Reject buttons.
+6. Approving or rejecting POSTs to `/api/agent/approvals/{incident_id}/decision` and the pipeline resumes.
 
 ## Running locally (dev mode)
 
-Requires the backend services running (docker-compose or manually).
+Requires backend services running (docker-compose or manually).
 
 ```bash
 cd ui/dashboard/react-app
@@ -45,7 +61,7 @@ npm run dev
 # → http://localhost:3000
 ```
 
-The Vite dev server proxies API calls:
+Vite dev proxy:
 
 | Path prefix | Target |
 |---|---|
@@ -53,20 +69,23 @@ The Vite dev server proxies API calls:
 | `/api/act/*` | `http://localhost:8003` (Actuator) |
 | `/api/agent/*` | `http://localhost:8004` (AI Agent) |
 
+In Docker the proxy targets are overridden via env vars to use Docker service names (`TWIN_TARGET`, `ACT_TARGET`, `AGENT_TARGET`).
+
 ## Running in Docker
 
-The UI is part of the main `docker-compose.yml`. Nginx at port 80 serves the React app and proxies all API routes.
+The UI is part of the main `docker-compose.yml`.
 
 ```bash
 # From repo root — first time or after changes
 docker compose up --build
 
-# Rebuild only UI services after source changes
-docker compose up --build react-app nginx
+# Rebuild only UI + AI Agent after source changes
+docker compose up -d --build react-app ai-agent
 
-# UI available at:
-#   http://localhost           — ORION dashboard
-#   http://localhost/grafana/  — Grafana (existing dashboards)
+# Services:
+#   http://localhost:3000  — ORION dashboard (Vite dev server)
+#   http://localhost:80    — ORION dashboard (nginx)
+#   http://localhost:3001  — Grafana
 ```
 
 ## Directory structure
@@ -82,17 +101,17 @@ ui/
     │   └── provisioning/      — Grafana datasource config
     └── react-app/
         ├── package.json
-        ├── vite.config.ts     — dev proxy config
-        ├── tailwind.config.js
+        ├── vite.config.ts     — dev proxy + Docker env var targets
+        ├── tailwind.config.js — darkMode: 'class'
         └── src/
-            ├── App.tsx
+            ├── App.tsx        — dark mode toggle (html.dark via useEffect)
             ├── config.ts      — API base URLs + poll intervals
             ├── api/           — typed API clients (digitalTwin, actuator, aiAgent)
-            ├── components/    — Header, service status dots
+            ├── components/    — Header (dark toggle, Grafana link → :3001)
             └── pages/
-                ├── Dashboard.tsx   — KPI charts + sparklines + health
+                ├── Dashboard.tsx   — per-cell multi-line KPI sparklines + health
                 ├── DigitalTwin.tsx — per-cell detail + fault injection
-                ├── AIAgent.tsx     — pipeline trigger + approval gate
+                ├── AIAgent.tsx     — fault trigger + live pending approvals
                 └── Actuator.tsx    — rollback + manual actions
 ```
 
@@ -104,7 +123,7 @@ Color coding: PRB > 80% → red, > 60% → amber. SLA breach rows highlighted re
 
 ## Fault scenarios (Digital Twin page)
 
-Cell-specific scenarios require a **Target Cell** selector (shown above the buttons). The correct params are sent automatically per scenario.
+Cell-specific scenarios require a **Target Cell** selector. Params are sent automatically per scenario.
 
 | Button | Scenario | Needs cell |
 |---|---|---|
@@ -114,17 +133,13 @@ Cell-specific scenarios require a **Target Cell** selector (shown above the butt
 | Policy Misconfig | Inverts slice-premium/slice-iot priorities | No |
 | Energy Saving Failure | Forces target cell to SLEEP at peak load | Yes |
 
-Each fault has a matching **Restore** button that sends the correct restore scenario name and cell params to the twin.
-
-The **Inject Fault + Trigger AI Pipeline** button injects `evening_congestion` and fires the full LangGraph pipeline automatically via `/fault/inject-agent`.
+Each fault has a matching **Restore** button.
 
 ## Valid slice IDs
 
 `slice-premium` · `slice-standard` · `slice-iot`
 
-All slice policy forms (Digital Twin and Actuator pages) use a dropdown restricted to these values.
-
 ## Known limitations
 
-- Collector service has no `/health` endpoint exposed — always shown as unknown on Dashboard.
+- Collector service has no `/health` endpoint — always shown as unknown on Dashboard.
 - KPI sparklines accumulate from page load only (in-memory, no historical backfill from InfluxDB).

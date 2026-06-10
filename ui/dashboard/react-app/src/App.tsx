@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Header from './components/Header'
 import Dashboard from './pages/Dashboard'
 import DigitalTwin from './pages/DigitalTwin'
@@ -14,11 +14,21 @@ const PAGES: Record<string, React.ComponentType> = {
 
 export default function App() {
   const [activePage, setActivePage] = useState('Dashboard')
+  const [isDark, setIsDark] = useState(false)
   const Page = PAGES[activePage] ?? Dashboard
 
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', isDark)
+  }, [isDark])
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header active={activePage} onNav={setActivePage} />
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors">
+      <Header
+        active={activePage}
+        onNav={setActivePage}
+        isDark={isDark}
+        onToggleDark={() => setIsDark(d => !d)}
+      />
       <main className="max-w-screen-xl mx-auto px-6 py-6">
         <Page />
       </main>

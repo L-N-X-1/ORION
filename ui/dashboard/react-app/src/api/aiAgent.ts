@@ -1,5 +1,14 @@
 import { AGENT_BASE } from '../config'
 
+export interface PendingApproval {
+  incident_id: string
+  thread_id: string
+  reasons: string[]
+  blast_radius: number
+  evaluated_rules: string[]
+  requested_at: string
+}
+
 export interface AgentEvent {
   event_id: string
   correlation_id: string
@@ -39,11 +48,14 @@ export const agentApi = {
     ),
 
   runPipeline: (event: AgentEvent) =>
-    post<Record<string, unknown>>('/run', event),
+    post<Record<string, unknown> & { status?: string; incident_id?: string; approve_url?: string }>('/run', event),
 
   approveDecision: (incidentId: string, decision: 'approved' | 'rejected', approver: string) =>
-    post<{ status: string; incident_id: string; decision: string }>(`/approvals/${encodeURIComponent(incidentId)}/decision`, {
-      decision,
-      approver,
-    }),
+    post<{ status: string; incident_id: string; thread_id: string; decision: string; approver: string; pipeline_halted: boolean }>(
+      `/approvals/${encodeURIComponent(incidentId)}/decision`,
+      { decision, approver },
+    ),
+
+  pendingApprovals: () =>
+    get<{ pending: PendingApproval[]; count: number }>('/approvals/pending'),
 }
