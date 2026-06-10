@@ -385,6 +385,22 @@ async def seed_kpi(snapshot: KPISnapshot) -> dict:
     return {"status": "seeded", "entity_id": snapshot.entity_id}
 
 
+@app.get("/approvals/pending", summary="List all pending human approvals")
+async def list_pending_approvals() -> Dict[str, Any]:
+    from shared.redis_client import scan_keys
+    keys = await scan_keys("approval:*")
+    pending = []
+    for key in keys:
+        raw = await get_value(key)
+        if raw:
+            try:
+                pending.append(json.loads(raw))
+            except json.JSONDecodeError:
+                pass
+    pending.sort(key=lambda x: x.get("requested_at", ""), reverse=True)
+    return {"pending": pending, "count": len(pending)}
+
+
 @app.get("/health")
 async def health() -> Dict[str, str]:
     return {"status": "ok"}

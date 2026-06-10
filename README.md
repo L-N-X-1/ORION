@@ -18,6 +18,7 @@ An autonomous AI-powered Network Operations Center (NOC) for 5G/6G infrastructur
 - **Anomaly Detection** — Background loop scans KPI trends every 30 s and fires early-warning events before thresholds breach
 - **Human-in-the-Loop** — Safety gate interrupts pipeline for operator approval when required; resumes autonomously after decision
 - **Autonomous NOC** — Detects incidents, diagnoses root causes, proposes and executes remediations, rolls back if things get worse, and writes a structured post-incident report
+- **Web Dashboard** — React + Tailwind UI with per-cell multi-line KPI sparklines, live pending-approval panel (polls Redis every 5 s), dark mode, fault injection trigger, and memory store inspector
 
 ---
 
@@ -75,12 +76,28 @@ Services:
 
 | Service       | URL                    |
 |---------------|------------------------|
+| Dashboard     | http://localhost:3000  |
 | API Gateway   | http://localhost:8000  |
 | Grafana       | http://localhost:3001  |
 | Digital Twin  | http://localhost:8001  |
 | AI Agent      | http://localhost:8004  |
 | Prometheus    | http://localhost:9090  |
 | InfluxDB      | http://localhost:18086 |
+
+---
+
+## Web Dashboard
+
+Open `http://localhost:3000` after `docker compose up -d`.
+
+| Page | Description |
+|---|---|
+| **Dashboard** | Per-cell multi-line KPI sparklines (PRB, Throughput, Latency, SINR, HO Fail, Packet Loss, SLA), live service health cards, recent events feed. Dark mode toggle (🌙/☀️) in header. |
+| **Digital Twin** | Per-cell KPI history, fault injection & restore, handover tuning, energy mode, slice policy controls. |
+| **AI Agent** | Inject fault scenarios to trigger the LangGraph pipeline. **Pending Approvals** panel polls the agent every 5 s and shows any pipeline suspended at the Human Approval gate with one-click Approve / Reject. |
+| **Actuator** | Manual rollback, slice policy, handover, and energy mode controls with audit trail. |
+
+Grafana dashboards: `http://localhost:3001`
 
 ---
 

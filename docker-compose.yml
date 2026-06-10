@@ -188,6 +188,9 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=development
+      - TWIN_TARGET=http://digital-twin:8001
+      - ACT_TARGET=http://actuator:8003
+      - AGENT_TARGET=http://ai-agent:8003
     networks: [orion]
 
   nginx:

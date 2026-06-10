@@ -24,3 +24,15 @@ async def get_value(key: str) -> Optional[str]:
 
 async def set_value(key: str, value: str, ttl_seconds: int) -> None:
     await _get_redis().set(key, value, ex=ttl_seconds)
+
+
+async def scan_keys(pattern: str) -> list[str]:
+    keys: list[str] = []
+    cursor = 0
+    redis = _get_redis()
+    while True:
+        cursor, batch = await redis.scan(cursor=cursor, match=pattern, count=100)
+        keys.extend(batch)
+        if cursor == 0:
+            break
+    return keys
