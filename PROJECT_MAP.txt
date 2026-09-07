@@ -1,0 +1,2178 @@
+================================================================================
+ORION — PROJECT MAP FOR AGENT CONSUMPTION
+Generated: 2026-09-04
+Last updated: 2026-09-05 — Twin Console pass. Added digital-twin/ui/ (a React
+operator console for the twin), four new digital-twin endpoints it depends on
+(/changes, /faults, /ues, WS /ws/telemetry), and a twin-ui service in the twin
+stack. Sections touched: PROJECT OVERVIEW, DIRECTORY TREE, DIGITAL TWIN
+(main.py), TWIN CONSOLE (new), ROUTING, CONFIG & INFRASTRUCTURE.
+================================================================================
+
+HOW TO USE THIS DOCUMENT
+------------------------
+This is a structural reference to the ORION repository, written so another
+AI coding agent can orient itself without re-reading the whole codebase.
+Function/class signatures below were extracted programmatically with
+Python's `ast` module (not hand-transcribed), so they are exact as of the
+generation date — re-run against the live tree if files have changed since.
+
+Per-file blocks follow this format:
+
+  PATH: <repo-relative path>
+  PURPOSE: <one-line, hand-written summary — what this file is FOR>
+  lines: <line count>
+  module docstring: <verbatim first lines of the file's module docstring, if any>
+  imports: <verbatim import statements>
+  classes:
+    class Name(Base):  -- <docstring first line, if any>
+      def method(self, args) -> ReturnType:  -- <docstring first line, if any>
+  functions:
+    def name(args) -> ReturnType:  -- <docstring first line, if any>
+
+A file whose only content is a module docstring + "TODO: AN-XXX-###" is a
+STUB — flagged explicitly in its PURPOSE line. Several services keep these
+placeholder files even though the real implementation lives elsewhere
+(usually in that service's main.py) — do not assume a stub file means the
+feature is missing; check the PURPOSE note, it says where the real code is.
+
+--------------------------------------------------------------------------------
+PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+ORION ("Operational RAN Intelligence & Optimization Network") is a home-lab
+autonomous NOC for a simulated 5G RAN. Internal code/comments still call it
+AURA-NET (pre-rename codename) — this appears in docstrings, FastAPI app
+titles, and Kafka topic names (aura.event.v1, aura.kpi.v1); it is the same
+project as "ORION" in the README/branding, not a separate system.
+
+Closed loop (logically — see SEPARATION note below for the current physical
+repo state): a SimPy digital twin (digital-twin/) simulates a 12-cell gNodeB
+grid driven by real Milan mobile-traffic CSV data, emitting KPIs and
+threshold-crossing events onto Kafka. A 7-node LangGraph pipeline
+(agentic-ai/services/ai-agent) consumes those events and runs:
+  Triage -> Root Cause -> Planner -> Safety -> [Human Approval] -> Executor -> Verifier
+Deterministic policy rules (agentic-ai/services/ai-agent/safety/policy_engine.py) gate
+every action; an LLM (Ollama, local, default model llama3.3) enriches
+narratives and makes bounded choices at each stage but never bypasses the
+rules. The Executor calls agentic-ai/services/actuator to apply changes back onto the
+digital twin; the Verifier compares before/after KPIs and can trigger
+automatic rollback. A React dashboard (agentic-ai/ui/dashboard/react-app) gives an
+operator visibility + manual controls + a pending-approvals queue.
+
+There are TWO unrelated React apps in this repo — do not conflate them:
+  agentic-ai/ui/dashboard/react-app  = the agent pipeline's 4-page dashboard
+                                       (see FRONTEND section)
+  digital-twin/ui                    = the Twin Console, the digital twin's own
+                                       9-page operator UI, added 2026-09-05
+                                       (see TWIN CONSOLE section)
+They share no code, no build, no container and no port. The Twin Console talks
+only to digital-twin:8001 and embeds Grafana; it does not reach agentic-ai.
+
+SEPARATION — digital-twin/ and agentic-ai/ are two fully independent repos-
+in-one-repo, each with its own docker-compose.yml/.env.example/Makefile, and
+they are NOT networked together:
+  Repo root now contains exactly two source directories — digital-twin/ and
+  agentic-ai/ — plus loose root files (README.md, LICENSE, PROJECT_MAP.txt,
+  tree.txt, .gitignore). Everything that used to live at root or under
+  services/ was sorted into one of the two:
+    digital-twin/  = the twin app + its OWN zookeeper/kafka/influxdb/grafana
+                      (data/csv, data/kafka, grafana/provisioning all moved
+                      inside it — data/timeseries/influxdb/init.sh was
+                      removed in a later pass, see CONFIG section below)
+    agentic-ai/     = services/{collector,actuator,api-gateway,ai-agent} +
+                      ui/ (react dashboard + nginx) + its OWN
+                      zookeeper/kafka/redis/postgres/prometheus + tests/ +
+                      docs/ (data/kafka [duplicated into both stacks — see
+                      below], data/timeseries/postgres, infra/prometheus.yml
+                      and the (now auto-loading) docker-compose.override.yml)
+  Both stacks got their OWN Kafka+Zookeeper (data/kafka's aura.*.v1 schemas
+  were duplicated into digital-twin/data/kafka AND agentic-ai/data/kafka;
+  topics.sh was duplicated too but digital-twin's copy was later deleted —
+  it was never mounted or executed anywhere, since KAFKA_AUTO_CREATE_TOPICS
+  _ENABLE=true already creates both topics on first publish. agentic-ai's
+  copy is unchanged) so each can run standalone without the other, on
+  distinct host ports (digital-twin's Kafka is published on 9093, not 9092,
+  to avoid a collision if both stacks run at once). InfluxDB+Grafana moved
+  to digital-twin only (nothing in agentic-ai reads/writes InfluxDB —
+  collector's query_metrics.py is still a stub); Postgres+Redis+Prometheus
+  stayed with agentic-ai only (actuator/postgres, ai-agent/redis).
+
+  What this means in practice: agentic-ai/services/ai-agent's TWIN_URL,
+  agentic-ai/ui/dashboard/react-app's TWIN_TARGET, agentic-ai's nginx
+  /api/twin/ + /grafana/ routes (now commented out — nginx fails to start
+  with a dangling static proxy_pass target), and agentic-ai/infra/
+  prometheus.yml's digital-twin scrape job (now removed) all point at a
+  "digital-twin" hostname that does not exist on agentic-ai's docker
+  network. This is intentional and NOT yet fixed — the user explicitly
+  deferred re-connecting the two stacks ("we will manage the correlation
+  between them later"). Whoever does that later will need to either put
+  both stacks' containers on one shared external docker network, or point
+  agentic-ai's env vars at digital-twin's host-published port 8001 (e.g.
+  via host.docker.internal), and un-comment the nginx blocks +
+  re-add the prometheus job.
+
+  Before this pass, the twin briefly lived at services/digital-twin/ (moved
+  to top-level digital-twin/ in an earlier step) with everything else still
+  under one shared services/ + one root docker-compose.yml — that
+  intermediate state no longer exists; this SEPARATION note supersedes it.
+
+Two agentic-ai services are effectively stubs: agentic-ai/services/api-gateway
+(only /health implemented — no auth/RBAC/routing exists anywhere in the
+stack) and most of agentic-ai/services/collector (only /health implemented;
+http/mqtt/kafka ingestors and query_metrics are all 4-line TODO placeholders
+— nothing in agentic-ai currently reads or writes InfluxDB as a result,
+which is also why InfluxDB was not duplicated into the agentic-ai stack).
+
+--------------------------------------------------------------------------------
+DIRECTORY TREE (source-relevant paths only)
+--------------------------------------------------------------------------------
+ORION/
+  README.md, LICENSE (MIT), PROJECT_MAP.txt, tree.txt, .gitignore
+                                root now holds ONLY these loose files plus
+                                the two stack folders below — no other
+                                top-level directories.
+
+  digital-twin/                 SimPy RAN simulator — fully independent stack
+    main.py, world_state.py, kpi_synthesizer.py, dataset_loader.py,
+    fault_injector.py, mobility.py, event_generator.py, whatif_runner.py,
+    topology.py, Dockerfile, requirements.txt, README.md
+    docker-compose.yml          digital-twin + zookeeper + kafka (host 9093)
+                                 + influxdb + grafana + twin-ui (host 8080),
+                                 own bridge network. Grafana now also sets
+                                 GF_SECURITY_ALLOW_EMBEDDING + anonymous
+                                 Viewer auth so twin-ui can iframe its panels.
+    docker-compose.override.yml hot-reload volume mount, auto-loaded
+    .env.example, Makefile      up / down / logs / seed / ui-dev / ui-build
+    data/
+      csv/                      dataset CSVs (gitignored, user-supplied)
+      kafka/                    aura.*.v1 schemas only (duplicated — see also
+                                 agentic-ai/data/kafka; topics.sh removed —
+                                 was dead, see SEPARATION note)
+    grafana/provisioning/       Grafana datasource + dashboard provisioning
+                                 (datasource moved from the old ui/dashboard/
+                                 grafana; org/bucket/token fixed to actually
+                                 match INFLUXDB_ORG/BUCKET/TOKEN; a
+                                 dashboards/ provider config + one dashboard
+                                 JSON were added later — see CONFIG section)
+    ui/                         Twin Console — Vite + React 18 + TS + Tailwind
+                                 + ECharts operator UI for THIS twin only (do
+                                 not confuse with agentic-ai/ui/dashboard/
+                                 react-app, which is the agent pipeline's own
+                                 4-page dashboard; the two are unrelated apps).
+                                 Dockerfile (node build -> nginx) + nginx.conf
+                                 proxying /api/twin/ to digital-twin:8001 with
+                                 WebSocket upgrade, and /grafana/ to
+                                 grafana:3000 for the Analytics page's panel-
+                                 list fetch only (Grafana sends no CORS
+                                 headers; the iframes still load from Grafana's
+                                 own origin). That proxy_pass goes through a
+                                 variable + Docker resolver so nginx still
+                                 starts when Grafana is down. README.md
+                                 documents the design system and pages.
+      src/api/                  twin.ts (REST client), types.ts, telemetry.tsx
+                                 (WebSocket provider + REST polling fallback +
+                                 per-cell history ring buffer)
+      src/lib/                  status.ts (palette + KPI threshold bands, kept
+                                 aligned with event_generator.py), format.ts,
+                                 series.ts (tick-aligned aggregation)
+      src/components/           Shell, Panel, Stat, Led, Chart (ECharts base),
+                                 TopologyCanvas (hand-written SVG hex grid),
+                                 CellRail, KpiMatrix, CellActions, EventFeed,
+                                 Toaster
+      src/pages/                Overview, Topology, Cells, CellDetail, Slices,
+                                 Mobility, Faults, WhatIf, Analytics (embeds
+                                 the provisioned Grafana dashboard)
+
+  agentic-ai/                   LangGraph NOC pipeline — fully independent stack
+    docker-compose.yml          zookeeper + kafka (host 9092) + redis +
+                                 postgres + prometheus + collector + actuator
+                                 + api-gateway + ai-agent + react-app + nginx
+    docker-compose.override.yml hot-reload mounts incl. tests/ into ai-agent,
+                                 auto-loaded (was dead config at the old
+                                 infra/docker-compose.override.yml location)
+    .env.example, Makefile      up / down / logs / test
+    pyrightconfig.json          extraPaths: ["services/ai-agent"] (path is
+                                 relative to agentic-ai/, still correct)
+    .run_ai_agent_test.py, tmp_ai_run_test.py   ad hoc manual test scripts
+    services/
+      collector/                 telemetry ingestion (mostly stubs), port 8002
+      actuator/                  applies config changes, port 8003
+      api-gateway/                stub, port 8000
+      ai-agent/                   LangGraph pipeline, FastAPI, port 8004->8003
+        orchestrator/             graph definition, runner, human-approval node
+        triage/  root_cause/  planner/  safety/  executor/  verifier/
+        shared/                   schemas, event bus, memory store, redis, tools
+    ui/
+      dashboard/react-app/src/    Vite+React+TS dashboard (4 pages)
+      nginx/                      reverse proxy — /api/twin/ + /grafana/
+                                   routes commented out, see SEPARATION note
+    data/
+      kafka/                     topic setup script + aura.*.v1 schemas
+                                  (duplicated from digital-twin/data/kafka)
+      timeseries/postgres/       init.sql mounted into the postgres container
+                                  (used by actuator's change/audit tables)
+    docs/
+      architecture.png, orion_logo.png   (referenced by root README.md)
+      runbooks/local-dev.md
+      scenarios/*.yml             5 fault-scenario fixtures
+    infra/
+      prometheus.yml              digital-twin scrape job removed, see
+                                   SEPARATION note
+    tests/
+      unit/                       2 pure-logic unit test files
+      scenario-tests/fault_injection/   1 end-to-end scenario test
+
+
+==============================================================================
+DIGITAL TWIN — digital-twin/
+==============================================================================
+
+  PATH: digital-twin/main.py
+  PURPOSE: FastAPI app entrypoint. Runs the SimPy sim in a background thread, exposes all digital-twin REST endpoints (health, metrics, topology, events, whatif, fault injection, actuation) plus the UI-facing read models (/changes, /faults, /ues) and the /ws/telemetry WebSocket, writes KPIs to InfluxDB + Kafka. /actions/* endpoints now capture a "previous" snapshot per change (used by /actions/rollback to restore the actual prior value instead of hardcoded factory defaults) and are wrapped in the same _state_lock the sim thread uses.
+    lines: 493
+    module docstring: AURA-NET Digital Twin Service — main.py
+  Ticket: AN-TWN-001
+
+  FastAPI application that:
+    1. Runs the SimPy simulation in a background thread.
+    2. Exposes REST endpoints consumed by agents and the collector.
+    3. Writes KPIs to InfluxDB and events + KPIs to Kafka.
+    imports:
+      from __future__ import annotations
+      import json
+      import os
+      import threading
+      import time
+      import urllib.request
+      import uuid
+      from datetime import datetime, timezone
+      from typing import Optional
+      import simpy
+      from fastapi import FastAPI, HTTPException, Query
+      from fastapi.middleware.cors import CORSMiddleware
+      from pydantic import BaseModel
+      from dataset_loader import DatasetLoader
+      from event_generator import EventGenerator
+      from fault_injector import FaultInjector
+      from kpi_synthesizer import KpiSynthesizer
+      from mobility import MobilityProcess
+      from whatif_runner import WhatIfRunner
+      from world_state import EnergyMode, WorldState
+    classes:
+      class WhatIfRequest(BaseModel):
+      class SlicePolicyRequest(BaseModel):
+      class HandoverRequest(BaseModel):
+      class EnergyModeRequest(BaseModel):
+      class RollbackRequest(BaseModel):
+      class FaultRequest(BaseModel):
+      class AgentFaultRequest(BaseModel):
+    functions:
+      def _write_to_influx(kpis: list[dict]) -> None:
+      def _publish_kpis(kpis: list[dict]) -> None:
+      def _simulation_loop() -> None:
+      def health():
+      def get_metrics(cell_id: str | None=Query(None), last_n: int=Query(10, ge=1, le=60)):
+      def get_topology(entity_id: str | None=Query(None)):
+      def get_events(entity_id: str | None=Query(None), limit: int=Query(50, ge=1, le=500)):
+      def run_whatif(req: WhatIfRequest):
+      def apply_slice_policy(req: SlicePolicyRequest):
+      def tune_handover(req: HandoverRequest):
+      def enable_energy_saving(req: EnergyModeRequest):
+      def rollback(req: RollbackRequest):
+      def inject_fault(req: FaultRequest):
+      def restore_fault(req: FaultRequest):
+      def _fire_agent_event(event_payload: dict) -> None:  -- Background thread: wait one tick then POST event to AI agent /run.
+      def inject_agent_fault(req: AgentFaultRequest):  -- Injects a synthetic fault (no SimPy pin) and fires a NetworkEvent directly
+      def restore_agent_fault(req: AgentFaultRequest):
+      def snapshot():
+      def list_changes():  -- GET /changes — all change records, newest first (added for the Twin Console)
+      def list_faults():  -- GET /faults — pinned loads, synthetic faults, degraded backhaul, non-ACTIVE cells, A3 anomalies, slice inversion
+      def list_ues():  -- GET /ues — UE distribution per cell and per slice
+      def _telemetry_frame(frame_type: str='tick') -> dict:
+      async def ws_telemetry(ws: WebSocket):  -- WS /ws/telemetry — one frame per tick; each socket polls the tick counter rather than being pushed to from the SimPy thread
+
+  PATH: digital-twin/world_state.py
+  PURPOSE: Domain model for the simulated RAN: Cell, UE, NetworkSlice, BackhaulLink, EnergyMode/LinkStatus enums, and WorldState (the single source of truth, deep-clonable for what-if runs).
+    lines: 275
+    module docstring: AURA-NET Digital Twin — world_state.py
+  Ticket: AN-TWN-001
+
+  Defines every entity in the simulated 5G RAN:
+    Cell / gNodeB, NetworkSlice, UE, BackhaulLink, WorldState
+    imports:
+      from __future__ import annotations
+      import copy
+      import time
+      from dataclasses import dataclass, field
+      from enum import Enum
+      from typing import Dict, List, Optional
+    classes:
+      class EnergyMode(str, Enum):
+      class LinkStatus(str, Enum):
+      class BackhaulLink:
+        def degrade(self, delay_ms: float, loss_pct: float) -> None:
+        def restore(self) -> None:
+        def to_dict(self) -> dict:
+      class NetworkSlice:
+        def to_dict(self) -> dict:
+      class UE:
+        def to_dict(self) -> dict:
+      class Cell:
+        def effective_prb(self) -> int:
+        def prb_utilization(self) -> float:  -- 0–100 %
+        def to_dict(self) -> dict:
+      class WorldState:  -- Single source of truth for the entire simulated network.
+        def __init__(self) -> None:
+        def _build_topology(self) -> None:
+        def push_kpi(self, cell_id: str, kpi: dict) -> None:
+        def get_kpi_history(self, cell_id: str, last_n: int=10) -> List[dict]:
+        def get_all_latest_kpis(self) -> List[dict]:
+        def snapshot(self) -> dict:
+        def clone(self) -> 'WorldState':  -- Deep copy for what-if simulation.
+        def get_topology(self, entity_id: Optional[str]=None) -> dict:
+
+  PATH: digital-twin/kpi_synthesizer.py
+  PURPOSE: Computes all 10 per-cell KPIs (prb_util, throughput, SINR, CQI, latency, packet loss, cpu_load, ho_fail_rate, energy_mode, sla_violation) each tick from WorldState.
+    lines: 170
+    module docstring: AURA-NET Digital Twin — kpi_synthesizer.py
+  Ticket: AN-TWN-001
+
+  Synthesizes all 10 KPIs per cell per tick from the WorldState.
+  Formulas are physically motivated but simplified — the goal is
+  directionally correct agent-observable dynamics, not radio physics.
+
+  KPIs produced per cell:
+    prb_util, throughput_mbps, sinr_db, cqi,
+    latency_p95_ms, packet_loss_pct, cpu_load_pct,
+    ho_fail_rate, energy_mode, sla_violation
+    imports:
+      from __future__ import annotations
+      import math
+      import random
+      import time
+      from datetime import datetime, timezone
+      from typing import TYPE_CHECKING
+    classes:
+      class KpiSynthesizer:
+        def __init__(self, seed: int=42) -> None:
+        def synthesize(self, state: 'WorldState', tick: int, is_peak: bool) -> list[dict]:  -- Compute one KPI snapshot per cell and push into WorldState history.
+        def _compute_cell_kpi(self, cell: 'Cell', state: 'WorldState', tick: int, is_peak: bool) -> dict:
+        def _avg_neighbour_load(self, cell: 'Cell', state: 'WorldState') -> float:
+    functions:
+      def _sinr_to_cqi(sinr_db: float) -> int:
+
+  PATH: digital-twin/dataset_loader.py
+  PURPOSE: Loads and merges real CSV traffic data (Milan Telecom Italia dataset) into per-cell demand curves; supports DATASET_SOURCES override or DATASET_DIR auto-discovery, falls back to synthetic diurnal curves.
+    lines: 395
+    module docstring: AURA-NET Digital Twin — dataset_loader.py
+  Ticket: AN-TWN-001
+
+  Auto-discovers and merges all CSV files in DATASET_DIR, then maps
+  per-cell demand curves to the 12 simulation cells.
+
+  Environment variables (mutually exclusive — first match wins):
+    DATASET_SOURCES : per-cell overrides  (highest priority)
+                      Format: cell_id:csv_path:id_column:id_value:value_column
+                      Separate entries with |
+
+    DATASET_DIR     : folder containing CSV files (auto-discovery mode)
+                      All .csv files in this folder are loaded and merged automatically.
+
+    (neither set)   : synthetic diurnal fallback for all cells
+
+  Supported CSV format (Italian Telecom 2013 and compatible):
+    Columns: CellID, Datetime, smsin, smsout, callin, callout, internet
+
+  Cell to CellID mapping (Milan grid):
+    Row 0 (city centre) : C00=4455  C01=4456  C02=4553  C03=4554
+    Row 1 (mixed)       : C10=5055  C11=5056  C12=5153  C13=5154
+    Row 2 (residential) : C20=5555  C21=5556  C22=5653  C23=5654
+    imports:
+      from __future__ import annotations
+      import math
+      import os
+      import random
+      from datetime import datetime
+      from pathlib import Path
+      from typing import TYPE_CHECKING, Dict, List, Optional
+      import numpy as np
+    classes:
+      class CellSourceOverride:
+        def __init__(self, cell_id: str, csv_path: str, id_column: str, id_value: str, value_column: str) -> None:
+        def parse_env(raw: str) -> Dict[str, 'CellSourceOverride']:
+      class DatasetLoader:
+        def __init__(self, seed: int=42) -> None:
+        def _load_mode_overrides(self, overrides_raw: str) -> None:  -- Load each cell from its explicitly configured CSV path.
+        def _load_mode_directory(self, folder: str) -> None:  -- Merge all CSVs in folder, then extract per-cell curves.
+        def _load_all_csvs(self, folder: str) -> 'Optional[pd.DataFrame]':
+        def _load_from_merged(self, cell_id: str, df: 'pd.DataFrame') -> None:
+        def _load_from_override(self, cell_id: str, src: CellSourceOverride) -> None:
+        def _use_synthetic(self, cell_id: str) -> None:
+        def _synthetic_diurnal(self, cell_id: str) -> List[float]:
+        def _pick_value_column(self, df: 'pd.DataFrame') -> Optional[str]:
+        def _normalise(self, values: 'np.ndarray') -> List[float]:
+        def _expand_to_ticks(self) -> None:
+        def _compute_tick_offset(self) -> int:  -- Return the tick index corresponding to the simulation start time.
+        def _print_summary(self) -> None:
+        def get_load_factor(self, cell_id: str, tick: int) -> float:
+        def is_peak_hour(self, tick: int) -> bool:
+        def list_sources(self) -> List[dict]:
+  (also has a module-level `if __name__ == "__main__": DatasetLoader()`
+  guard, not picked up by the ast def/class scan above — this is what
+  `make seed` runs, see CONFIG section)
+
+  PATH: digital-twin/fault_injector.py
+  PURPOSE: Named fault-scenario scripts (evening_congestion, backhaul_degradation, mobility_storm, policy_misconfiguration, energy_saving_failure) plus their restore counterparts and the agent-clearable ephemeral variant.
+    lines: 137
+    module docstring: AURA-NET Digital Twin — fault_injector.py
+  Ticket: AN-TWN-001
+
+  Provides named scenario scripts that inject faults into WorldState.
+  Used by the /fault endpoint and by AN-TST-001 scenario tests.
+
+  Scenarios:
+    - evening_congestion        : spike load on 3 adjacent cells
+    - backhaul_degradation      : degrade backhaul link on a cell
+    - mobility_storm            : set near-zero A3 offset on a cell
+    - policy_misconfiguration   : invert slice priorities
+    - energy_saving_failure     : apply SLEEP during peak load
+    imports:
+      from __future__ import annotations
+      from typing import TYPE_CHECKING
+    classes:
+      class FaultInjector:
+        def evening_congestion(state: 'WorldState', cells: list[str] | None=None) -> dict:  -- Spike load to 0.98 on 3 adjacent cells (default C00, C01, C10).
+        def backhaul_degradation(state: 'WorldState', cell_id: str='C00', delay_ms: float=150.0, loss_pct: float=5.0) -> dict:  -- Degrade the backhaul link for a specific cell.
+        def mobility_storm(state: 'WorldState', cell_id: str='C11', a3_offset: float=0.1) -> dict:  -- Set near-zero A3 offset to trigger excessive handover attempts.
+        def policy_misconfiguration(state: 'WorldState') -> dict:  -- Invert slice priorities so IoT gets premium resources.
+        def energy_saving_failure(state: 'WorldState', cell_id: str='C20') -> dict:  -- Apply SLEEP mode during peak load, causing PRB overflow.
+        def restore_backhaul(state: 'WorldState', cell_id: str='C00') -> dict:
+        def restore_energy_mode(state: 'WorldState', cell_id: str='C20') -> dict:
+        def restore_slice_priorities(state: 'WorldState') -> dict:
+        def restore_handover_params(state: 'WorldState', cell_id: str='C11') -> dict:
+        def restore_evening_congestion(state: 'WorldState', cells: list[str] | None=None) -> dict:
+        def agent_evening_congestion(state: 'WorldState', cells: list[str] | None=None) -> dict:  -- Ephemeral congestion: overrides PRB in KPI synthesis only.
+        def restore_agent_evening_congestion(state: 'WorldState', cells: list[str] | None=None) -> dict:
+
+  PATH: digital-twin/mobility.py
+  PURPOSE: UE mobility + handover simulation; A3-offset-aware handover-trigger threshold (misconfigured offset lowers the trigger threshold, producing observable mobility storms).
+    lines: 91
+    module docstring: AURA-NET Digital Twin — mobility.py
+  Ticket: AN-TWN-001
+
+  Simulates UE mobility and handover attempts.
+  Handover eligibility is now A3-offset-aware:
+    - Normal offset (≥1.0 dB) : triggers above 80% PRB (load-driven)
+    - Misconfigured offset (<1.0 dB) : threshold drops proportionally,
+      modelling real RAN ping-pong sensitivity regardless of load.
+      At a3_offset=0.1 the threshold falls to ~53%, so mobility_storm
+      is observable without requiring a concurrent congestion fault.
+    imports:
+      from __future__ import annotations
+      import random
+      from typing import TYPE_CHECKING
+    classes:
+      class MobilityProcess:
+        def __init__(self, seed: int=42) -> None:
+        def run_tick(self, state: 'WorldState') -> None:  -- Called once per simulation tick.
+        def _evaluate_handover(self, ue, state: 'WorldState') -> None:
+        def _find_best_neighbour(self, ue, serving, state: 'WorldState'):
+
+  PATH: digital-twin/event_generator.py
+  PURPOSE: Post-tick KPI threshold checks that emit structured NetworkEvents (congestion, signal, mobility, backhaul, outage) to Kafka topic aura.event.v1 and an in-memory queue.
+    lines: 186
+    module docstring: AURA-NET Digital Twin — event_generator.py
+  Ticket: AN-TWN-001
+
+  Checks KPI thresholds after each tick and emits structured events
+  onto the aura.event.v1 Kafka topic (and an in-memory queue for REST).
+    imports:
+      from __future__ import annotations
+      import json
+      import uuid
+      import asyncio
+      from collections import defaultdict, deque
+      from datetime import datetime, timezone
+      from typing import TYPE_CHECKING, Deque, Dict, List
+    classes:
+      class EventGenerator:
+        def __init__(self, kafka_producer=None) -> None:
+        def evaluate(self, kpis: List[dict], state: 'WorldState') -> List[dict]:  -- Called after every KPI tick.
+        def _check_congestion(self, kpi: dict, state) -> List[dict]:
+        def _check_signal(self, kpi: dict) -> List[dict]:
+        def _check_mobility(self, kpi: dict) -> List[dict]:
+        def _check_backhaul(self, kpi: dict, state) -> List[dict]:
+        def _check_outage(self, kpi: dict) -> List[dict]:
+        def _congestion_severity(self, kpi: dict) -> str:
+        def _make_event(self, event_type: str, entity_id: str, severity: str, evidence: dict, sim_time_s: float) -> dict:
+        def _emit(self, event: dict) -> None:
+        def get_recent_events(self, limit: int=50) -> List[dict]:
+        def get_events_for_entity(self, entity_id: str, limit: int=20) -> List[dict]:
+
+  PATH: digital-twin/whatif_runner.py
+  PURPOSE: Clones WorldState, applies a candidate action plan to the clone, fast-forwards the SimPy sim for a horizon, and returns a baseline-vs-with-action KPI delta forecast. Used by the Planner agent. _simulate() now respects the cloned state's pinned_loads/synthetic_faults (mirrors main.py's tick loop) instead of overwriting every cell's load from the dataset every tick — previously an active fault would incorrectly appear to clear itself within one simulated tick in both the baseline and with-action forecast. _apply_action() also clears the "evening_congestion" synthetic fault when action_type is apply_slice_policy, mirroring what the live /actions/apply_slice_policy endpoint does, so the with-action forecast can actually show the remediation resolving it.
+    lines: 217
+    module docstring: AURA-NET Digital Twin — whatif_runner.py
+  Ticket: AN-AGT-007
+
+  Clones the current WorldState, applies an action plan on the clone,
+  runs the SimPy simulation forward for a defined horizon, then
+  returns a delta forecast (baseline vs. with-action KPI comparison).
+
+  Used by: Planner Agent via POST /whatif/run
+    imports:
+      from __future__ import annotations
+      import simpy
+      from typing import TYPE_CHECKING, Any
+      from kpi_synthesizer import KpiSynthesizer
+      from mobility import MobilityProcess
+      from dataset_loader import DatasetLoader
+    classes:
+      class WhatIfRunner:
+        def __init__(self, dataset: DatasetLoader) -> None:
+        def run(self, live_state: 'WorldState', action_plan: dict, horizon_ticks: int=DEFAULT_HORIZON) -> dict:  -- 1. Clone the live WorldState.
+        def _simulate(self, state: 'WorldState', horizon_ticks: int, action_plan: Any) -> dict[str, list[dict]]:  -- Runs a SimPy environment for horizon_ticks ticks on the cloned state.
+        def _apply_action(self, state: 'WorldState', action_plan: dict) -> None:  -- Apply the action to the cloned state before simulating.
+        def _build_report(self, action_plan: dict, baseline: dict[str, list[dict]], with_action: dict[str, list[dict]], horizon_ticks: int) -> dict:
+        def _confidence(self, improvement: int, horizon: int) -> float:  -- Simple heuristic: more improvement over longer horizon = higher confidence.
+
+  PATH: digital-twin/topology.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-TWN-001). Topology is actually built inline inside world_state.py's WorldState._build_topology().
+    lines: 4
+    module docstring: AURA-NET Digital Twin — topology
+  TODO: AN-TWN-001
+
+==============================================================================
+TWIN CONSOLE — digital-twin/ui/
+==============================================================================
+Added 2026-09-05. The digital twin's OWN operator UI — live topology, per-cell
+drill-down, slice/mobility views, fault injection, what-if forecasting, and an
+embedded Grafana page. It is NOT the agentic-ai dashboard (see FRONTEND section
+for that one); the two are separate apps with separate builds and containers.
+
+Stack: Vite 5.4 + React 18.3 + TypeScript 5.6 (strict, noUnusedLocals) +
+Tailwind 3.4 + ECharts 5.5 + TanStack Query 5.59 + react-router-dom 6.26 +
+lucide-react. Entry: main.tsx -> App.tsx. Container port 80, host 8080.
+Read directly (not AST-extracted — the AST scan in this document is Python-only).
+
+DESIGN CONSTRAINT (explicit user requirement, do not "modernise" it away):
+no purple/blue gradient palette. Warm graphite chassis (#0B0A09 / #121110 /
+#1E1C19), ONE accent — sodium amber #FFB01F, used for attention and
+interaction and never to mean "healthy" — plus teal #3FBFA8 nominal and coral
+#FF5F52 critical. Monospace tabular numerics everywhere, 10px uppercase
+tracked micro-labels, 1px panels with corner registration ticks, square status
+LEDs, 2px radius, no gradients/glow/shadow. Tokens live in tailwind.config.js
+and are MIRRORED in src/lib/status.ts for canvas + ECharts code that needs raw
+hex — change both together or they drift.
+
+  --- build / packaging ---
+
+  PATH: digital-twin/ui/Dockerfile
+  PURPOSE: Two stages. node:20-alpine builds with `npm ci` (package-lock.json
+    is committed) and takes VITE_GRAFANA_URL as a build ARG baked into the
+    bundle; nginx:1.27-alpine serves /app/dist and the nginx.conf below.
+
+  PATH: digital-twin/ui/nginx.conf
+  PURPOSE: Copied to /etc/nginx/conf.d/default.conf. Three things:
+    - a `map $http_upgrade $connection_upgrade` at http scope (conf.d is
+      included inside nginx's http block, so this is legal there) — required
+      or the telemetry WebSocket cannot upgrade through the proxy;
+    - location /            -> try_files, SPA fallback to /index.html;
+    - location /api/twin/   -> digital-twin:8001/ with Upgrade/Connection
+                               headers, proxy_buffering off, 3600s timeouts
+                               (this carries both REST and /ws/telemetry);
+    - location /grafana/    -> grafana:3000, used ONLY for the Analytics
+                               page's dashboard-panel-list fetch. Grafana
+                               sends no CORS headers, so a direct
+                               cross-origin fetch from :8080 to :3001 is
+                               blocked by the browser; the iframes still load
+                               from Grafana's own origin, which avoids having
+                               to set GF_SERVER_ROOT_URL / serve_from_sub_path
+                               and change how Grafana is reached directly.
+                               proxy_pass goes through a `set` variable plus
+                               `resolver 127.0.0.11` so nginx still STARTS
+                               when grafana is down — the static-proxy_pass
+                               failure mode that disabled agentic-ai's nginx
+                               routes (see ROUTING section) is deliberately
+                               avoided here.
+    - location = /healthz   -> 200 "ok", used by the compose healthcheck.
+
+  PATH: digital-twin/ui/vite.config.ts
+  PURPOSE: Dev server on 5173. Proxies /api/twin -> TWIN_TARGET (default
+    localhost:8001) with ws:true, and /grafana -> GRAFANA_TARGET (default
+    localhost:3001), so the same paths work in dev and in the container.
+    manualChunks splits echarts and react into their own bundles (echarts is
+    ~1 MB of the ~1.3 MB total and changes far less often than app code).
+
+  PATH: digital-twin/ui/tailwind.config.js
+  PURPOSE: The palette above as named colours, Inter/JetBrains Mono font
+    stacks, 2px default radius, `micro`/`tiny` font sizes, pulseled+sweep
+    keyframes. Not darkMode:'class' — the console is dark-only by design.
+
+  PATH: digital-twin/ui/src/index.css
+  PURPOSE: Tailwind layers plus the design system's component classes:
+    .label (micro uppercase mono), .panel + .panel-ticks (corner registration
+    marks via ::before/::after), .btn / .btn-primary / .btn-danger, .field,
+    .num (tabular monospace — used on EVERY number in the app), .row-hover,
+    and the body::before engineering-grid background.
+
+  --- data layer ---
+
+  PATH: digital-twin/ui/src/api/types.ts
+  PURPOSE: TS mirrors of the twin's payloads: CellKPI, Cell, Backhaul, Slice,
+    NetworkEvent, TwinHealth, Topology, ChangeRecord, FaultSurface,
+    UeDistribution, TelemetryFrame, WhatIfReport/WhatIfCellResult. Kept in
+    sync by hand with world_state.py's to_dict()s and kpi_synthesizer.py's
+    kpi dict — if a field is added there, add it here.
+
+  PATH: digital-twin/ui/src/api/twin.ts
+  PURPOSE: The whole REST surface as one `twin` object (health, metrics,
+    cellMetrics, topology, events, entityEvents, changes, faults, ues,
+    whatIf, applySlicePolicy, tuneHandover, setEnergyMode, rollback,
+    injectFault, restoreFault, injectAgentFault, restoreAgentFault) against
+    TWIN_BASE='/api/twin'. POST errors unwrap FastAPI's {"detail": ...}.
+    Also telemetrySocketUrl() (same-origin ws:// or wss://) and
+    grafanaBaseUrl()/setGrafanaBaseUrl() — resolution order is localStorage
+    operator override -> VITE_GRAFANA_URL build arg -> <current host>:3001.
+
+  PATH: digital-twin/ui/src/api/telemetry.tsx
+  PURPOSE: TelemetryProvider — the app's live-data spine. Opens
+    /api/twin/ws/telemetry, keeps a per-cell ring buffer of the last 240
+    ticks, dedupes events by event_id (cap 200), and exposes
+    {frame, history, events, transport, cellIds, revision} via useTelemetry().
+    Seeds history once at mount from 12 parallel
+    /metrics?cell_id=..&last_n=60 calls so charts are populated before the
+    first frame lands. If the socket will not open or drops, it falls back to
+    polling /metrics + /events + /topology every 5s and retries the socket
+    every 8s — `transport` drives the WS LIVE / REST POLL / NO LINK badge in
+    the header, so a degraded transport is visible rather than silent.
+    useLatestKpis() prefers the live frame and falls back to the tail of the
+    seeded history.
+
+  PATH: digital-twin/ui/src/lib/status.ts
+  PURPOSE: Single source of truth for colour and thresholds. C (raw hex
+    palette, mirrors tailwind.config.js), SERIES (chart series order),
+    LEVEL_HEX/TEXT/BORDER, and KPI_LEVEL — the nominal/elevated/critical
+    bands per KPI, ALIGNED WITH event_generator.py's thresholds so the UI
+    never shows "nominal" for a KPI the twin is already raising an event on.
+    Deliberately has NO throughput band: throughput follows offered demand,
+    so a low reading is not a fault. loadHex()/mix()/withAlpha() drive the
+    topology ramp.
+
+  PATH: digital-twin/ui/src/lib/series.ts
+  PURPOSE: Tick-aligned aggregation over the history buffers —
+    alignedTicks(), cellSeries(), aggregateSeries() (sum|avg), slaSeries(),
+    rankCells(). Cells are aligned by tick number, not array index, so a cell
+    that missed a tick does not shift the whole chart.
+
+  PATH: digital-twin/ui/src/lib/format.ts
+  PURPOSE: num/int/pct/signed/simClock/clockTime/relativeTime/titleise.
+
+  --- components ---
+
+  PATH: digital-twin/ui/src/components/Shell.tsx
+  PURPOSE: Left nav rail (collapsible, amber bar on the active route) + top
+    status bar: transport LED, sim clock, tick counter, active-fault badge
+    (from /faults), high-severity event count, Kafka/Influx LEDs (from
+    /health). Renders <Outlet/>.
+
+  PATH: digital-twin/ui/src/components/TopologyCanvas.tsx
+  PURPOSE: Hand-written SVG hex grid — no React Flow / Cytoscape. C{row}{col}
+    ids map onto a SPACED grid (COL_STEP/ROW_STEP, not a tiled honeycomb):
+    the twin's neighbour list is 4-connected, so gaps let every link render
+    as a readable orthogonal segment instead of vanishing under a neighbour.
+    Six switchable layers (load/latency/sinr/handover/energy/backhaul) recolour
+    the hexes; a PRB rail and backhaul tick stay visible in every layer; SLA
+    breach pulses. Wheel zooms, drag pans. NOTE: it deliberately does NOT call
+    setPointerCapture — capturing on the <svg> retargets the subsequent click
+    away from the hexagon group and makes cells unselectable; a 4px slop
+    threshold (movedRef) distinguishes a pan from a click instead.
+
+  PATH: digital-twin/ui/src/components/Chart.tsx
+  PURPOSE: ECharts wrapper + chartBase(), the shared chart chassis (hairline
+    axes, monospace ticks, dark tooltip, no gradients). Handles init/dispose
+    and a ResizeObserver. Every chart in the app starts from chartBase().
+
+  PATH: digital-twin/ui/src/components/CellActions.tsx
+  PURPOSE: The write path onto a cell — energy mode buttons and A3/TTT
+    handover inputs. Mutations invalidate the changes/faults/topology queries
+    so the change log and deviation list stay honest. Used by both the
+    topology inspector and the cell detail page.
+
+  PATH: digital-twin/ui/src/components/{Panel,Stat,Led,CellRail,KpiMatrix,EventFeed,Toaster}.tsx
+  PURPOSE: Panel (bordered section + corner ticks + header/meta/actions),
+    Stat/Field (KPI tiles), Led/Tag (square status indicators), CellRail
+    (per-cell sparkline cards — trend), KpiMatrix (cell x KPI heat grid —
+    cross-KPI comparison; the two answer different questions), EventFeed
+    (severity-coded list with expandable evidence), Toaster (action results).
+
+  --- pages (routes are defined in App.tsx) ---
+
+  PATH: digital-twin/ui/src/pages/Overview.tsx        route /
+  PURPOSE: 5 stat tiles, aggregate throughput + SLA-breach bars, top-loaded
+    PRB lines, CellRail, KpiMatrix, live event stream.
+
+  PATH: digital-twin/ui/src/pages/Topology.tsx        route /topology
+  PURPOSE: TopologyCanvas + layer switcher + inspector (KPIs, neighbours,
+    backhaul, CellActions) + entity-filtered events.
+
+  PATH: digital-twin/ui/src/pages/Cells.tsx           route /cells
+  PURPOSE: Sortable register of every cell against every KPI.
+
+  PATH: digital-twin/ui/src/pages/CellDetail.tsx      route /cells/:cellId
+  PURPOSE: Four paired-KPI charts (load+throughput, radio quality,
+    latency+loss, mobility+compute), stat tiles, CellActions, backhaul,
+    neighbours, entity events.
+
+  PATH: digital-twin/ui/src/pages/Slices.tsx          route /slices
+  PURPOSE: Slice envelope cards, policy editor (POST apply_slice_policy),
+    envelope bar chart, UE distribution, slice change history. NOTE: it
+    labels slice load as "not yet simulated" — NetworkSlice.current_load is
+    never written by the simulator, so it is permanently 0.
+
+  PATH: digital-twin/ui/src/pages/Mobility.tsx        route /mobility
+  PURPOSE: HO attempt/failure roll-up, failure-rate chart, A3-offset vs
+    failure-rate scatter with the 1.0 dB storm threshold marked, per-cell
+    register with a one-click restore_handover_params.
+
+  PATH: digital-twin/ui/src/pages/Faults.tsx          route /faults
+  PURPOSE: Active deviation list (/faults), the five scenario injectors with
+    per-scenario params, the agent hand-off trigger (/fault/inject-agent),
+    and the change log with rollback. The inject/restore names differ —
+    inject uses the FaultInjector method name, restore uses the suffix of
+    restore_<name> (backhaul, handover_params, slice_priorities,
+    energy_mode, evening_congestion) — which is encoded per scenario in the
+    SCENARIOS table.
+
+  PATH: digital-twin/ui/src/pages/WhatIf.tsx          route /what-if
+  PURPOSE: Action-plan builder (slice policy / handover / energy mode +
+    horizon + affected cells, with a live JSON payload preview), POSTs
+    /whatif/run, renders overall tiles, a baseline-vs-action chart and a
+    per-cell delta table. Deltas under 0.05 render as "·" — below that the
+    twin's own run-to-run noise exceeds the signal.
+
+  PATH: digital-twin/ui/src/pages/Analytics.tsx       route /analytics
+  PURPOSE: Grafana embedding. Reads the dashboard's panel list from
+    /grafana/api/dashboards/uid/digital-twin-cell-kpi at runtime and renders
+    EVERY panel it finds via d-solo iframes, mirroring Grafana's 24-column
+    gridPos onto a 6-column grid (w 8 -> 2 cols, 12 -> 3, 24 -> 6). A panel
+    added to the dashboard therefore appears here with no front-end change.
+    Falls back to DASHBOARD_FALLBACK (the 12 provisioned panels) if the API
+    is unreachable, and says which list is in use in its header. Also a
+    kiosk-mode full-dashboard view, time-range buttons, and a per-browser
+    Grafana base-URL override. The iframes carry no Panel header of their own
+    because the Grafana solo panel already renders its title.
+
+==============================================================================
+COLLECTOR — agentic-ai/services/collector/
+==============================================================================
+
+  PATH: agentic-ai/services/collector/main.py
+  PURPOSE: FastAPI app entrypoint. Only a /health endpoint is implemented.
+    lines: 13
+    module docstring: AURA-NET Collector Service
+  Ticket: AN-COL-001
+  Telemetry ingestion via HTTP, MQTT, and Kafka.
+    imports:
+      from fastapi import FastAPI
+    functions:
+      def health():
+
+  PATH: agentic-ai/services/collector/kafka_consumer.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-COL-001). NOTE: the actual Kafka-consumer-to-InfluxDB path described in the README/report is not found implemented anywhere under agentic-ai/services/collector in this scan; verify at runtime which service really performs that write before relying on it.
+    lines: 4
+    module docstring: AURA-NET Collector — kafka_consumer
+  TODO: AN-COL-001
+
+  PATH: agentic-ai/services/collector/http_ingestor.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-COL-001).
+    lines: 4
+    module docstring: AURA-NET Collector — http_ingestor
+  TODO: AN-COL-001
+
+  PATH: agentic-ai/services/collector/mqtt_ingestor.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-COL-001).
+    lines: 4
+    module docstring: AURA-NET Collector — mqtt_ingestor
+  TODO: AN-COL-001
+
+  PATH: agentic-ai/services/collector/query_metrics.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-COL-001).
+    lines: 4
+    module docstring: AURA-NET Collector — query_metrics
+  TODO: AN-COL-001
+
+==============================================================================
+ACTUATOR — agentic-ai/services/actuator/
+==============================================================================
+
+  PATH: agentic-ai/services/actuator/main.py
+  PURPOSE: FastAPI app entrypoint AND the entire implementation. Endpoints: /health, /metrics, /actions/apply_slice_policy, /actions/tune_handover, /actions/enable_energy_saving, /changes/{id}, /changes/{id}/snapshot, /actions/rollback. Writes change records + audit rows to PostgreSQL, takes pre-change KPI snapshots via httpx calls to the digital twin.
+    lines: 222
+    module docstring: AURA-NET Actuator Service
+  Ticket: AN-ACT-001
+  Applies network configuration changes to the Digital Twin.
+    imports:
+      from __future__ import annotations
+      import os
+      import uuid
+      import json
+      from typing import Any, Dict
+      import asyncpg
+      import httpx
+      from dotenv import load_dotenv
+      from fastapi import FastAPI, HTTPException
+      from pydantic import BaseModel
+    classes:
+      class SlicePolicyRequest(BaseModel):
+      class HandoverRequest(BaseModel):
+      class EnergyModeRequest(BaseModel):
+      class RollbackRequest(BaseModel):
+    functions:
+      async def _pg_connect():
+      async def startup():
+      async def shutdown():
+      def _gen_change_id() -> str:
+      async def _store_change_record(conn: asyncpg.Connection, record: Dict[str, Any]):
+      async def _record_audit(conn: asyncpg.Connection, change_id: str, incident_id: str, action_type: str, parameters_hash: str, policy_decision: str, actor: str, pre_ref: str | None=None):
+      async def _take_pre_change_snapshot(client: httpx.AsyncClient, endpoint: str, params: Dict[str, Any]):
+      async def health():
+      async def metrics():
+      async def apply_slice_policy(req: SlicePolicyRequest):
+      async def tune_handover(req: HandoverRequest):
+      async def enable_energy_saving(req: EnergyModeRequest):
+      async def get_change(change_id: str):
+      async def get_change_snapshot(change_id: str):
+      async def rollback(req: RollbackRequest):
+
+  PATH: agentic-ai/services/actuator/change_record.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-ACT-001). Change-record persistence actually lives inline in main.py (_store_change_record).
+    lines: 4
+    module docstring: AURA-NET Actuator — change_record
+  TODO: AN-ACT-001
+
+  PATH: agentic-ai/services/actuator/energy_mode.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-ACT-001). Energy-mode logic actually lives inline in main.py.
+    lines: 4
+    module docstring: AURA-NET Actuator — energy_mode
+  TODO: AN-ACT-001
+
+  PATH: agentic-ai/services/actuator/handover_tuner.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-ACT-001). Handover-tuning logic actually lives inline in main.py.
+    lines: 4
+    module docstring: AURA-NET Actuator — handover_tuner
+  TODO: AN-ACT-001
+
+  PATH: agentic-ai/services/actuator/rollback.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-ACT-001). Rollback logic actually lives inline in main.py.
+    lines: 4
+    module docstring: AURA-NET Actuator — rollback
+  TODO: AN-ACT-001
+
+  PATH: agentic-ai/services/actuator/slice_policy.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-ACT-001). Slice-policy logic actually lives inline in main.py.
+    lines: 4
+    module docstring: AURA-NET Actuator — slice_policy
+  TODO: AN-ACT-001
+
+==============================================================================
+API GATEWAY — agentic-ai/services/api-gateway/
+==============================================================================
+
+  PATH: agentic-ai/services/api-gateway/main.py
+  PURPOSE: FastAPI app entrypoint. Only a /health endpoint is implemented — no routing or auth is wired up.
+    lines: 13
+    module docstring: AURA-NET API Gateway
+  Ticket: AN-GWY-001
+  Central entry point — proxies to downstream services with auth + RBAC.
+    imports:
+      from fastapi import FastAPI
+    functions:
+      def health():
+
+  PATH: agentic-ai/services/api-gateway/auth.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-GWY-001). No authentication exists anywhere in the stack today.
+    lines: 4
+    module docstring: AURA-NET API Gateway — auth
+  TODO: AN-GWY-001
+
+  PATH: agentic-ai/services/api-gateway/rbac.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-GWY-001). No RBAC exists anywhere in the stack today.
+    lines: 4
+    module docstring: AURA-NET API Gateway — rbac
+  TODO: AN-GWY-001
+
+  PATH: agentic-ai/services/api-gateway/routes.py
+  PURPOSE: STUB — 4-line TODO placeholder (ticket AN-GWY-001). Nothing proxies through the gateway; nginx routes /api/twin, /api/act, /api/agent directly to their services (see ROUTING section below) and only an unmatched /api/* would ever reach the gateway.
+    lines: 4
+    module docstring: AURA-NET API Gateway — routes
+  TODO: AN-GWY-001
+
+==============================================================================
+AI AGENT / shared — agentic-ai/services/ai-agent/shared/
+==============================================================================
+
+  PATH: agentic-ai/services/ai-agent/shared/schemas.py
+  PURPOSE: Pydantic v2 contracts for every inter-agent hand-off: NetworkEvent -> IncidentRecord -> RCAReport -> ActionPlan -> PolicyDecisionRecord -> ChangeConfirmation -> VerificationReport, plus the PipelineState that threads through the whole LangGraph.
+    lines: 243
+    module docstring: shared/schemas.py
+  -----------------
+  Pydantic models that flow as structured artifacts between agents in the
+  LangGraph pipeline.  Every agent receives one of these models as input and
+  emits a richer one as output.
+    imports:
+      from __future__ import annotations
+      from datetime import datetime
+      from enum import Enum
+      from typing import Any, Dict, List, Literal, Optional
+      from pydantic import BaseModel, Field
+    classes:
+      class Severity(str, Enum):
+      class IncidentType(str, Enum):
+      class PolicyDecision(str, Enum):
+      class KPISnapshot(BaseModel):
+      class NetworkEvent(BaseModel):
+      class IncidentRecord(BaseModel):
+      class Hypothesis(BaseModel):
+      class HypothesisTree(BaseModel):
+      class RCAReport(BaseModel):
+      class ActionParam(BaseModel):
+      class CandidateAction(BaseModel):
+      class ActionPlan(BaseModel):
+      class PolicyDecisionRecord(BaseModel):
+      class ChangeConfirmation(BaseModel):
+      class VerificationReport(BaseModel):
+      class PipelineState(BaseModel):  -- The single mutable state object threaded through every node in the
+      class ApprovalDecisionRequest(BaseModel):
+
+  PATH: agentic-ai/services/ai-agent/shared/event_bus.py
+  PURPOSE: Kafka consumer for aura.event.v1 / aura.kpi.v1 with a registrable async-callback dispatch model; also runs a REST-poll fallback against the digital twin's /metrics since KPIs aren't published to Kafka.
+    lines: 167
+    module docstring: shared/event_bus.py
+  -------------------
+  Kafka consumer that subscribes to aura.event.v1 and aura.kpi.v1 and
+  dispatches messages to registered async callbacks.
+
+  Also runs a background REST poller against the digital-twin's /metrics
+  endpoint as a fallback, since the digital-twin does not publish KPIs to
+  Kafka directly — it only writes to InfluxDB.
+
+  Usage (inside the FastAPI lifespan or a background task):
+
+      from shared.event_bus import EventBus, poll_kpis_from_twin
+
+      bus = EventBus()
+      bus.on_event(my_event_handler)          # async def handler(event: NetworkEvent)
+      asyncio.create_task(bus.start())        # Kafka consumer
+      asyncio.create_task(poll_kpis_from_twin())  # REST poller fallback
+    imports:
+      from __future__ import annotations
+      import asyncio
+      import json
+      import logging
+      import os
+      from datetime import datetime
+      from typing import Awaitable, Callable, List
+      import httpx
+      from aiokafka import AIOKafkaConsumer
+      from shared.memory_store import store_kpi
+      from shared.schemas import KPISnapshot, NetworkEvent
+    classes:
+      class EventBus:
+        def __init__(self) -> None:
+        def on_event(self, handler: EventHandler) -> None:  -- Register an async callback that receives every NetworkEvent.
+        async def start(self) -> None:  -- Start consuming both topics in a single consumer group.
+        async def stop(self) -> None:
+        async def _dispatch(self, topic: str, payload: dict) -> None:
+        async def _handle_kpi(self, payload: dict) -> None:  -- Handle KPI messages arriving via Kafka (if twin ever publishes them).
+        async def _handle_event(self, payload: dict) -> None:
+    functions:
+      async def poll_kpis_from_twin() -> None:  -- Polls GET /metrics from the digital-twin every POLL_INTERVAL_S seconds
+
+  PATH: agentic-ai/services/ai-agent/shared/memory_store.py
+  PURPOSE: In-process (module-level dict) KPI history + incident store shared by all agents in the same process. Explicitly a stand-in for Redis/a DB in a future iteration.
+    lines: 111
+    module docstring: shared/memory_store.py
+  ----------------------
+  A lightweight in-process KPI and incident store.
+
+  In production this would be backed by Redis or a database.  For the MVP
+  it lives in a module-level dict so all agents running in the same process
+  share the same state without extra infrastructure.
+
+  Keys
+  ----
+  kpi:{entity_id}          → list[KPISnapshot]  (latest 100 snapshots per cell)
+  incident:{incident_id}   → IncidentRecord
+    imports:
+      from __future__ import annotations
+      import asyncio
+      from collections import defaultdict, deque
+      from typing import Any, Dict, List, Optional
+      from shared.schemas import IncidentRecord, KPISnapshot
+    functions:
+      async def store_kpi(snapshot: KPISnapshot) -> None:
+      async def get_recent_kpis(entity_id: str, n: int=10) -> List[KPISnapshot]:
+      async def get_latest_kpi(entity_id: str) -> Optional[KPISnapshot]:
+      async def store_incident(record: IncidentRecord) -> None:
+      async def get_incident(incident_id: str) -> Optional[IncidentRecord]:
+      async def find_incident_by_correlation(correlation_id: str) -> Optional[IncidentRecord]:  -- Return the first open incident that shares correlation_id.
+      async def find_active_incident_by_entity(entity_id: str, incident_type: str, window_seconds: int=300) -> Optional[IncidentRecord]:  -- Return active incident for same entity+type created within window_seconds.
+      async def claim_entity_processing(entity_id: str, incident_type: str) -> bool:  -- Atomically claim processing slot for entity+type. Returns False if already claimed.
+      async def release_entity_processing(entity_id: str, incident_type: str) -> None:
+      async def all_incidents() -> List[IncidentRecord]:
+
+  PATH: agentic-ai/services/ai-agent/shared/redis_client.py
+  PURPOSE: Thin async Redis wrapper (get/set with TTL, key scan) used for the human-approval queue and executor idempotency guard.
+    lines: 38
+    module docstring: AURA-NET — shared/redis_client
+    imports:
+      from __future__ import annotations
+      import os
+      from typing import Optional
+      import redis.asyncio as aioredis
+    functions:
+      def _get_redis() -> aioredis.Redis:
+      async def get_value(key: str) -> Optional[str]:
+      async def set_value(key: str, value: str, ttl_seconds: int) -> None:
+      async def scan_keys(pattern: str) -> list[str]:
+
+  PATH: agentic-ai/services/ai-agent/shared/tools.py
+  PURPOSE: HTTP client wrappers other agents call: query_metrics/query_all_kpis (collector), get_topology/get_full_topology (digital twin), create_ticket (api-gateway, currently a no-op target since the gateway has no routes).
+    lines: 145
+    module docstring: shared/tools.py
+  ---------------
+  HTTP tool wrappers used by multiple agents.
+
+  Each function maps to one REST endpoint exposed by the collector or
+  digital-twin service.  The base URLs are resolved from environment
+  variables so they work both locally (docker-compose service names) and
+  in CI (localhost with port-forwarding).
+
+  Environment variables (see .env.example):
+      COLLECTOR_URL   – e.g. http://collector:8001
+      TWIN_URL        – e.g. http://digital-twin:8000
+      TICKET_URL      – e.g. http://api-gateway:8080
+    imports:
+      from __future__ import annotations
+      import logging
+      import os
+      from typing import Any, Dict, List, Optional
+      import httpx
+    functions:
+      def _get_client() -> httpx.AsyncClient:
+      async def query_metrics(kpi: str, entity_id: str, time_range_minutes: int=10) -> List[Dict[str, Any]]:
+      async def query_all_kpis(entity_id: str, time_range_minutes: int=10) -> Dict[str, Any]:
+      async def get_topology(entity_id: str) -> Dict[str, Any]:
+      async def get_full_topology() -> Dict[str, Any]:  -- Return the full 12-cell topology graph from the digital twin.
+      async def create_ticket(summary: str, severity: str, incident_id: str, extra: Optional[Dict[str, Any]]=None) -> Optional[str]:  -- Open a service-management ticket via the API gateway.
+
+==============================================================================
+AI AGENT / orchestrator — agentic-ai/services/ai-agent/orchestrator/
+==============================================================================
+
+  PATH: agentic-ai/services/ai-agent/orchestrator/graph.py
+  PURPOSE: Builds and compiles the LangGraph StateGraph — the definitive source of the pipeline's routing logic. Module-level `pipeline` object is the compiled graph imported everywhere else.
+    lines: 160
+    module docstring: orchestrator/graph.py
+  ---------------------
+  LangGraph StateGraph definition for the AURA-NET agent pipeline.
+
+  Graph flow:
+      START → triage → root_cause → planner → safety ──(ALLOW)──────────────→ executor → verifier → END
+                                                      └─(ALLOW_WITH_APPROVAL)→ human_approval ──(approved)→ executor → verifier → END
+                                                      └─(DENY / halted)──────→ END
+                                                                             └─(rejected)────────────────→ END
+
+  Conditional edges short-circuit when:
+    - triage or root_cause sets pipeline_halted = True
+    - safety returns DENY
+    - safety returns ALLOW_WITH_APPROVAL and operator rejects
+    imports:
+      from __future__ import annotations
+      import logging
+      from typing import Any, Dict, Literal
+      from langgraph.checkpoint.memory import MemorySaver
+      from langgraph.graph import END, START, StateGraph
+      from orchestrator.human_approval import human_approval_node
+      from planner.agent import planner_node
+      from root_cause.agent import root_cause_node
+      from triage.agent import triage_node
+      from safety.agent import safety_node
+      from executor.agent import executor_node
+      from verifier.agent import verifier_node
+    functions:
+      def _should_continue_after_triage(state: Dict[str, Any]) -> Literal['root_cause', '__end__']:  -- Route to root_cause unless the pipeline was halted by the Triage Agent.
+      def _should_continue_after_rca(state: Dict[str, Any]) -> Literal['planner', '__end__']:  -- Route to planner unless the pipeline was halted by the Root Cause Agent.
+      def _should_continue_after_safety(state: Dict[str, Any]) -> Literal['executor', 'human_approval', '__end__']:  -- Route based on safety decision:
+      def _should_continue_after_human_approval(state: Dict[str, Any]) -> Literal['executor', '__end__']:  -- Route to executor if operator approved, else END.
+      def build_graph() -> StateGraph:  -- Construct and compile the AURA-NET LangGraph pipeline.
+
+  PATH: agentic-ai/services/ai-agent/orchestrator/langgraph_runner.py
+  PURPOSE: The AI-agent service's FastAPI entrypoint (largest file in the codebase at 458 lines). Subscribes to Kafka, exposes POST /run, POST /approvals/{id}/decision, GET /approvals/pending, GET /memory, GET /health, and runs a 30s background anomaly-detection loop that uses the LLM to flag early-warning trends before threshold breach.
+    lines: 458
+    module docstring: orchestrator/langgraph_runner.py
+  ---------------------------------
+  Entry point for the AI agent service.
+
+  Responsibilities
+  ----------------
+  1. Subscribe to the Kafka event bus (aura.event.v1).
+  2. Poll KPIs directly from the digital-twin REST API (fallback for Kafka).
+  3. For every NetworkEvent received, run the compiled LangGraph pipeline.
+  4. Expose a POST /run endpoint so the pipeline can also be triggered
+     directly (useful for testing and the API gateway).
+
+  The LangGraph pipeline runs asynchronously; each pipeline invocation is
+  isolated (no shared mutable state between runs).
+    imports:
+      from __future__ import annotations
+      import asyncio
+      import json
+      import logging
+      import os
+      import re
+      import uuid
+      from contextlib import asynccontextmanager
+      from datetime import datetime, timezone
+      from typing import Any, Dict, List
+      import uvicorn
+      from fastapi import FastAPI, HTTPException
+      from fastapi.responses import JSONResponse
+      from langchain_core.messages import HumanMessage, SystemMessage
+      from langchain_ollama import ChatOllama
+      from langgraph.types import Command
+      from orchestrator.graph import pipeline
+      from shared.event_bus import EventBus, poll_kpis_from_twin
+      from shared.memory_store import claim_entity_processing, find_active_incident_by_entity, release_entity_processing, store_kpi
+      from shared.redis_client import get_value
+      from shared.schemas import ApprovalDecisionRequest, IncidentType, KPISnapshot, NetworkEvent
+    functions:
+      async def _llm_anomaly_check(cell_id: str, kpis: List[KPISnapshot]) -> bool:  -- Returns True if LLM detects an early anomaly trend. False on failure.
+      async def _check_anomalies() -> None:  -- Check all cells for early-warning trends; fire synthetic events if found.
+      async def _anomaly_detection_loop() -> None:  -- Background loop: scan KPI trends every ANOMALY_INTERVAL_S seconds.
+      async def handle_network_event(event: NetworkEvent) -> None:  -- Callback invoked by the EventBus for every message on aura.event.v1.
+      def _log_pipeline_result(result: Dict[str, Any]) -> None:
+      async def lifespan(app: FastAPI):  -- Start the Kafka consumer and KPI poller on app startup.
+      async def run_pipeline(event: NetworkEvent) -> JSONResponse:  -- Directly invoke the LangGraph pipeline with a NetworkEvent payload.
+      async def decide_approval(incident_id: str, body: ApprovalDecisionRequest) -> Dict[str, Any]:  -- Resume a pipeline suspended at the human_approval node.
+      async def seed_kpi(snapshot: KPISnapshot) -> dict:  -- Seed a KPI snapshot directly — useful for testing without the digital-twin.
+      async def list_pending_approvals() -> Dict[str, Any]:
+      async def health() -> Dict[str, str]:
+      async def inspect_memory(entity_id: str='C00', n: int=5) -> dict:  -- Returns the last N KPI snapshots for an entity from the memory store.
+      def _serialise_state(state: Dict[str, Any]) -> Dict[str, Any]:  -- Convert any Pydantic model values in the state dict to plain dicts.
+      def _make_serialisable(obj: Any) -> Any:  -- Recursively convert datetime objects and other non-serialisable types.
+
+  PATH: agentic-ai/services/ai-agent/orchestrator/human_approval.py
+  PURPOSE: The human-in-the-loop node. Serializes the approval request to Redis, logs the /approvals URL, then calls LangGraph's interrupt() to checkpoint and suspend the run until an operator POSTs a decision.
+    lines: 99
+    module docstring: orchestrator/human_approval.py
+  -------------------------------
+  Human-in-the-loop approval node.
+
+  Triggered when the Safety Agent returns ALLOW_WITH_APPROVAL (blast radius > 10,
+  rate-limit exhausted but urgent, low what-if confidence, or peak-hour sensitive op).
+
+  Flow:
+    1. Serialize approval request → Redis (TTL 30 min).
+    2. Log operator-facing warning with the /approvals endpoint URL.
+    3. Call interrupt() — LangGraph checkpoints state and suspends the thread.
+    4. Resume path: operator POSTs to /approvals/{incident_id}/decision.
+       - "approved" → continue to executor.
+       - "rejected" → set pipeline_halted = True → graph routes to END.
+    imports:
+      from __future__ import annotations
+      import json
+      import logging
+      from datetime import datetime, timezone
+      from typing import Any, Dict
+      from langgraph.types import interrupt
+      from shared.redis_client import set_value
+      from shared.schemas import PipelineState, PolicyDecision
+    functions:
+      async def human_approval_node(state: Dict[str, Any]) -> Dict[str, Any]:
+
+  PATH: agentic-ai/services/ai-agent/orchestrator/handoff.py
+  PURPOSE: STUB — 5-line TODO placeholder describing the intended pipeline order; superseded by graph.py which actually implements it.
+    lines: 5
+    module docstring: AURA-NET AI Agent — orchestrator/handoff
+  LangGraph pipeline: Triage → RCA → Planner → Safety → Executor → Verifier
+  TODO: AN-AGT-001 onwards
+
+==============================================================================
+AI AGENT / triage — agentic-ai/services/ai-agent/triage/
+==============================================================================
+
+  PATH: agentic-ai/services/ai-agent/triage/agent.py
+  PURPOSE: Triage LangGraph node. Deduplicates concurrent incidents for the same entity via claim_entity_processing, classifies the event, builds the evidence bundle, and (optionally) asks the LLM for a natural-language summary.
+    lines: 243
+    module docstring: triage/agent.py
+  ---------------
+  NOC Triage Agent — LangGraph node.
+
+  Role  : Detect
+  Goal  : Transform a raw NetworkEvent into a clean IncidentRecord with
+          classification, scope, severity, and an evidence bundle.
+
+  The node is designed to be registered in the LangGraph StateGraph as:
+
+      graph.add_node("triage", triage_node)
+
+  It receives a PipelineState, reads raw_event, and writes incident_record
+  back into the state.
+
+  LLM usage
+  ---------
+  The agent uses an LLM (Claude / OpenAI) for two optional enrichment steps:
+    1. Natural-language summary of the incident (summary field).
+    2. Refinement of the classifier result when the event type is UNKNOWN.
+
+  All hard logic (classification, severity, scope expansion) is rule-based
+  so the agent works even if the LLM is unavailable.
+    imports:
+      from __future__ import annotations
+      import logging
+      import os
+      from datetime import datetime
+      from typing import Any, Dict
+      from langchain_ollama import ChatOllama
+      from langchain_core.messages import HumanMessage, SystemMessage
+      from shared.memory_store import claim_entity_processing, find_active_incident_by_entity, find_incident_by_correlation, release_entity_processing, store_incident
+      from shared.schemas import IncidentType, NetworkEvent, PipelineState, Severity
+      from shared.tools import create_ticket
+      from triage.classifier import classify_from_event, classify_from_kpis, compute_severity
+      from triage.evidence import build_evidence_window, expand_scope
+      from triage.incident_record import enrich_incident, new_incident
+    functions:
+      async def _generate_summary(event: NetworkEvent, incident_type: IncidentType, severity: Severity, affected_entities: list, evidence_snippet: str) -> str:  -- Call the LLM to produce a human-readable incident summary.
+      async def triage_node(state: Dict[str, Any]) -> Dict[str, Any]:  -- LangGraph node entry point.
+
+  PATH: agentic-ai/services/ai-agent/triage/classifier.py
+  PURPOSE: Pure, deterministic, LLM-free rule engine mapping a NetworkEvent or KPI pattern to an IncidentType + Severity. Fully unit-tested (see agentic-ai/tests/unit/test_triage_classifier.py).
+    lines: 140
+    module docstring: triage/classifier.py
+  --------------------
+  Rule-based incident classifier.
+
+  Maps a raw NetworkEvent (or a KPI snapshot pattern) to one of the five
+  canonical IncidentType values and an initial Severity.
+
+  The rules are intentionally deterministic so the agent is testable
+  without an LLM call.  The LLM layer (agent.py) uses the classifier output
+  as a starting point and can refine it based on richer context.
+    imports:
+      from __future__ import annotations
+      import re
+      from typing import Dict, List, Optional, Tuple
+      from shared.schemas import IncidentType, KPISnapshot, NetworkEvent, Severity
+    functions:
+      def classify_from_event(event: NetworkEvent) -> IncidentType:  -- Fast O(1) classification from the event_type string.
+      def classify_from_kpis(kpis: List[KPISnapshot]) -> IncidentType:  -- Pattern-match KPI values to an incident type.
+      def compute_severity(incident_type: IncidentType, kpis: List[KPISnapshot], severity_hint: str='unknown') -> Severity:  -- Assign severity from three signals:
+
+  PATH: agentic-ai/services/ai-agent/triage/evidence.py
+  PURPOSE: Builds the KPI evidence window + pre-incident baseline for an incident, and expands scope to neighbouring cells via the topology graph.
+    lines: 72
+    module docstring: triage/evidence.py
+  ------------------
+  Builds the evidence bundle that the Triage Agent attaches to an
+  IncidentRecord.
+
+  Responsibilities
+  ----------------
+  1. Pull a sliding KPI window for the primary entity.
+  2. Expand scope to neighbours via the topology graph.
+  3. Return a list of KPISnapshot objects (the evidence bundle) plus a
+     separate pre-incident baseline list.
+    imports:
+      from __future__ import annotations
+      import logging
+      from typing import List, Tuple
+      from shared.memory_store import get_recent_kpis
+      from shared.schemas import KPISnapshot
+      from shared.tools import get_topology, query_metrics
+    functions:
+      async def build_evidence_window(entity_id: str, time_range_minutes: int=10) -> Tuple[List[KPISnapshot], List[KPISnapshot]]:  -- Returns (evidence_kpis, pre_incident_baseline).
+      async def expand_scope(entity_id: str) -> List[str]:  -- Query the topology graph and return a list of entity IDs that should
+
+  PATH: agentic-ai/services/ai-agent/triage/incident_record.py
+  PURPOSE: Factory functions for constructing/enriching IncidentRecord objects — keeps agent.py free of model-construction boilerplate.
+    lines: 71
+    module docstring: triage/incident_record.py
+  -------------------------
+  Factory helpers for creating and enriching IncidentRecord objects.
+
+  Keeps the Triage Agent's agent.py clean by centralising all the
+  IncidentRecord construction logic here.
+    imports:
+      from __future__ import annotations
+      import uuid
+      from datetime import datetime
+      from typing import List, Optional
+      from shared.schemas import IncidentRecord, IncidentType, KPISnapshot, NetworkEvent, Severity
+    functions:
+      def new_incident(event: NetworkEvent, incident_type: IncidentType, severity: Severity, affected_entities: List[str], evidence_kpis: List[KPISnapshot], pre_incident_baseline: List[KPISnapshot], candidate_correlated_entities: Optional[List[str]]=None, summary: str='', incident_id: Optional[str]=None) -> IncidentRecord:  -- Create a fresh IncidentRecord from a NetworkEvent.
+      def enrich_incident(record: IncidentRecord, extra_entities: List[str], extra_kpis: List[KPISnapshot]) -> IncidentRecord:  -- Add newly discovered entities and KPI snapshots to an existing record.
+
+==============================================================================
+AI AGENT / root_cause — agentic-ai/services/ai-agent/root_cause/
+==============================================================================
+
+  PATH: agentic-ai/services/ai-agent/root_cause/agent.py
+  PURPOSE: Root Cause LangGraph node (358 lines, second-largest agent file). Deterministic correlation/hypothesis-building, LLM only adjusts confidence scores and writes the narrative.
+    lines: 358
+    module docstring: root_cause/agent.py
+  -------------------
+  Root Cause Agent — LangGraph node.
+
+  Role  : Analyze
+  Goal  : Explain WHY the incident happened by correlating KPIs, events, and
+          topology; produce a HypothesisTree with confidence scores and a full
+          RCAReport.
+
+  The node is registered in the LangGraph StateGraph as:
+
+      graph.add_node("root_cause", root_cause_node)
+
+  It receives a PipelineState with a populated incident_record and writes
+  rca_report back into the state.
+
+  LLM usage
+  ---------
+  The LLM is used for one step:
+    - Generating the natural-language RCA summary that operators read.
+
+  All analytical steps (KPI correlation, pattern detection, hypothesis
+  building, topology traversal) are deterministic Python.
+    imports:
+      from __future__ import annotations
+      import json
+      import logging
+      import os
+      import re
+      from typing import Any, Dict, List
+      from langchain_core.messages import HumanMessage, SystemMessage
+      from langchain_ollama import ChatOllama
+      from root_cause.correlator import correlation_matrix, detect_pattern
+      from root_cause.hypothesis_tree import build_hypothesis_tree
+      from root_cause.topology_graph import compute_structural_impact, find_synchronised_degradation, get_backhaul_peers, get_neighbours
+      from shared.memory_store import get_recent_kpis
+      from shared.schemas import IncidentRecord, IncidentType, KPISnapshot, PipelineState, RCAReport
+      from shared.tools import get_topology
+    functions:
+      async def _llm_adjust_hypotheses(hypotheses: List[Any], kpis_by_entity: Dict[str, List[Any]], pattern: Dict[str, Any]) -> List[Any]:  -- LLM reviews deterministic hypotheses and may adjust confidence scores.
+      async def _generate_rca_summary(incident: IncidentRecord, pattern: Dict[str, Any], dominant_hypothesis: Any, structural_info: Dict[str, Any]) -> str:  -- Call the LLM to produce a human-readable RCA summary.
+      async def root_cause_node(state: Dict[str, Any]) -> Dict[str, Any]:  -- LangGraph node entry point.
+      def _map_label_to_type(label: str) -> IncidentType:  -- Map a hypothesis label string to the closest IncidentType.
+
+  PATH: agentic-ai/services/ai-agent/root_cause/correlator.py
+  PURPOSE: Cross-cell KPI correlation engine — Pearson-like correlation matrix + detect_pattern(), the canonical signature used to distinguish congestion / backhaul / mobility-storm patterns.
+    lines: 129
+    module docstring: root_cause/correlator.py
+  ------------------------
+  Cross-cell KPI correlation engine for the Root Cause Agent.
+
+  Given a list of entity IDs and their KPI snapshots, this module computes
+  pairwise correlations and returns the canonical pattern signatures that the
+  hypothesis builder uses to distinguish congestion, backhaul issues, and
+  mobility storms.
+    imports:
+      from __future__ import annotations
+      import logging
+      from typing import Dict, List, Tuple
+      from shared.schemas import IncidentType, KPISnapshot
+    functions:
+      def correlation_matrix(kpis_by_entity: Dict[str, List[KPISnapshot]]) -> Dict[Tuple[str, str], float]:  -- Compute a simple Pearson-like correlation for the PRB utilisation series
+      def _pearson(xs: List[float], ys: List[float]) -> float:  -- Pearson correlation coefficient between two equal-length lists.
+      def detect_pattern(kpis_by_entity: Dict[str, List[KPISnapshot]]) -> Dict[str, object]:  -- Analyse KPI patterns across all entities and return a pattern summary dict:
+
+  PATH: agentic-ai/services/ai-agent/root_cause/hypothesis_tree.py
+  PURPOSE: Builds the ranked HypothesisTree from the correlator's pattern output, scoring confidence from pattern strength + KPI magnitude + topology match.
+    lines: 218
+    module docstring: root_cause/hypothesis_tree.py
+  ------------------------------
+  Builds a ranked HypothesisTree from the pattern analysis produced by
+  the correlator and the topology graph.
+
+  Each hypothesis has a confidence score computed from:
+    - pattern match strength (how many cells show the signature)
+    - KPI magnitude (how far above/below threshold)
+    - topology match (e.g., backhaul issue shared across peer cells)
+    imports:
+      from __future__ import annotations
+      import logging
+      from typing import Any, Dict, List
+      from shared.schemas import Hypothesis, HypothesisTree, IncidentType, KPISnapshot
+    functions:
+      def build_hypothesis_tree(pattern: Dict[str, Any], kpis_by_entity: Dict[str, List[KPISnapshot]], topology: Dict[str, Any], incident_type: IncidentType | None=None) -> HypothesisTree:  -- Produce a ranked HypothesisTree with confidence scores.
+      def _build_verification_checks(hypotheses: List[Hypothesis], pattern: Dict[str, Any]) -> List[str]:
+
+  PATH: agentic-ai/services/ai-agent/root_cause/topology_graph.py
+  PURPOSE: Async helpers answering topology questions for RCA: shared-neighbour lookup, shared-backhaul-peer lookup, synchronised-degradation detection, structural-impact scoring.
+    lines: 94
+    module docstring: root_cause/topology_graph.py
+  ----------------------------
+  Graph-based dependency traversal for the Root Cause Agent.
+
+  Answers questions like:
+    - "Which cells share this backhaul link?"
+    - "Which neighbours show synchronised KPI degradation?"
+    - "Is the congestion isolated or propagating across the grid?"
+    imports:
+      from __future__ import annotations
+      import logging
+      from typing import Dict, List, Optional
+      from shared.schemas import KPISnapshot
+      from shared.tools import get_topology
+    functions:
+      async def get_neighbours(entity_id: str) -> List[str]:  -- Return the list of direct-neighbour cell IDs for entity_id.
+      async def get_backhaul_peers(entity_id: str) -> List[str]:  -- Return cells that share the same backhaul link as entity_id.
+      async def find_synchronised_degradation(root_entity: str, kpis_by_entity: Dict[str, List[KPISnapshot]], kpi_field: str='prb_utilization') -> List[str]:  -- Return a list of entity IDs whose latest value for kpi_field is within
+      async def compute_structural_impact(affected_entities: List[str]) -> Dict[str, object]:  -- For each entity, fetch its topology and compute:
+
+==============================================================================
+AI AGENT / planner — agentic-ai/services/ai-agent/planner/
+==============================================================================
+
+  PATH: agentic-ai/services/ai-agent/planner/agent.py
+  PURPOSE: Planner LangGraph node. Builds candidate actions from the action catalogue, runs the what-if engine, scores forecasts, and asks the LLM to choose the best candidate + write a rationale.
+    lines: 176
+    module docstring: AURA-NET — planner/agent | Ticket: AN-AGT-003
+
+  Planner LangGraph node implementation.
+    imports:
+      from __future__ import annotations
+      import json
+      import logging
+      import os
+      import re
+      from datetime import datetime
+      from typing import Any, Dict, List, Tuple
+      from langchain_core.messages import HumanMessage, SystemMessage
+      from langchain_ollama import ChatOllama
+      from shared.schemas import PipelineState, ActionPlan, CandidateAction, ActionParam
+      from planner.action_catalogue import map_lever_to_actions
+      from planner.whatif_engine import run_whatif
+      from planner.delta_forecast import score_forecast
+    functions:
+      async def _llm_select_action(candidates: List[CandidateAction], delta_forecast: Dict[str, Any], rca: Any, hour: int) -> Tuple[int, str]:  -- Ask LLM to pick the best candidate action index.
+      async def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
+
+  PATH: agentic-ai/services/ai-agent/planner/action_catalogue.py
+  PURPOSE: Maps a root-cause remediation lever (e.g. 'apply_slice_policy') to concrete candidate action parameter dicts.
+    lines: 58
+    module docstring: AURA-NET — planner/action_catalogue | Ticket: AN-AGT-003
+
+  Provides mapping from remediation lever to concrete action parameters.
+    imports:
+      from typing import Dict, Any, List
+    functions:
+      def map_lever_to_actions(lever: str, rca_report: Dict[str, Any]) -> List[Dict[str, Any]]:  -- Return a list of candidate action parameter dicts for a lever.
+
+  PATH: agentic-ai/services/ai-agent/planner/delta_forecast.py
+  PURPOSE: Scores a what-if simulation's forecast output into a comparable structure for ranking candidates.
+    lines: 20
+    module docstring: AURA-NET — planner/delta_forecast | Ticket: AN-AGT-003
+
+  Parse and score what-if simulation output.
+    imports:
+      from typing import Dict, Any
+    functions:
+      def score_forecast(forecast: Dict[str, Any]) -> Dict[str, Any]:
+
+  PATH: agentic-ai/services/ai-agent/planner/whatif_engine.py
+  PURPOSE: Thin async httpx wrapper around the digital twin's POST /whatif/run.
+    lines: 20
+    module docstring: AURA-NET — planner/whatif_engine | Ticket: AN-AGT-003
+
+  Async wrapper around digital-twin POST /whatif/run
+    imports:
+      from __future__ import annotations
+      import os
+      from typing import Any, Dict
+      import httpx
+    functions:
+      async def run_whatif(action_plan: Dict[str, Any], horizon_ticks: int=120) -> Dict[str, Any]:
+
+  PATH: agentic-ai/services/ai-agent/planner/__init__.py
+    lines: 1
+    module docstring: Planner package for AURA-NET AI agent.
+
+==============================================================================
+AI AGENT / safety — agentic-ai/services/ai-agent/safety/
+==============================================================================
+
+  PATH: agentic-ai/services/ai-agent/safety/agent.py
+  PURPOSE: Safety LangGraph node. Runs the deterministic policy_engine first; only if that returns ALLOW does it run a secondary LLM contextual review (which can still escalate to ALLOW_WITH_APPROVAL).
+    lines: 132
+    module docstring: Safety LangGraph node — evaluates action_plan against deterministic rules,
+  then runs an optional LLM contextual review when rules return ALLOW.
+    imports:
+      from __future__ import annotations
+      import json
+      import logging
+      import os
+      import re
+      from typing import Any, Dict
+      from langchain_core.messages import HumanMessage, SystemMessage
+      from langchain_ollama import ChatOllama
+      from shared.schemas import PipelineState, PolicyDecision, PolicyDecisionRecord
+      from safety.policy_engine import evaluate
+      from safety.blast_radius import compute_blast_radius
+      from safety.rate_limiter import recent_change_count
+    functions:
+      async def _llm_safety_review(action_plan: Dict[str, Any], incident: Dict[str, Any], base_decision: PolicyDecisionRecord, blast: int) -> PolicyDecisionRecord:  -- Secondary LLM check when policy_engine returns ALLOW.
+      async def safety_node(state: Dict[str, Any]) -> Dict[str, Any]:
+
+  PATH: agentic-ai/services/ai-agent/safety/policy_engine.py
+  PURPOSE: The rule table: POL-001..POL-006. Deterministic, synchronous, no I/O — pure function over (action_plan, incident, recent_change_count, blast_radius, whatif_confidences).
+    lines: 48
+    module docstring: Policy engine implementing deterministic rules for safety decisions.
+    imports:
+      from __future__ import annotations
+      from datetime import datetime, timedelta
+      from typing import Dict, Any, List
+      from shared.schemas import PolicyDecision, PolicyDecisionRecord
+    functions:
+      def evaluate(action_plan: Dict[str, Any], incident: Dict[str, Any], recent_change_count: int, blast_radius: int, whatif_confidences: List[float]) -> PolicyDecisionRecord:
+
+  PATH: agentic-ai/services/ai-agent/safety/blast_radius.py
+  PURPOSE: Static per-action-type blast-radius heuristic (apply_slice_policy=12, enable_energy_saving=6, tune_handover=3, else=1). Not topology-aware.
+    lines: 15
+    module docstring: Compute blast radius (number of cells affected) from an ActionPlan.
+    imports:
+      from typing import Dict, Any
+    functions:
+      def compute_blast_radius(action_plan: Dict[str, Any]) -> int:
+
+  PATH: agentic-ai/services/ai-agent/safety/rate_limiter.py
+  PURPOSE: Queries PostgreSQL audit_log for the count of changes in the trailing N minutes, feeding POL-003.
+    lines: 13
+    module docstring: Rate limiter helpers — query PostgreSQL for recent change count.
+    imports:
+      import os
+      import asyncpg
+    functions:
+      async def recent_change_count(minutes: int=10) -> int:
+
+  PATH: agentic-ai/services/ai-agent/safety/__init__.py
+    lines: 1
+    module docstring: Safety package for AURA-NET AI agent.
+
+==============================================================================
+AI AGENT / executor — agentic-ai/services/ai-agent/executor/
+==============================================================================
+
+  PATH: agentic-ai/services/ai-agent/executor/agent.py
+  PURPOSE: Executor LangGraph node. Idempotency-checks via Redis, calls the actuator, writes a ChangeConfirmation, and records an audit-log entry.
+    lines: 55
+    module docstring: Executor LangGraph node — applies approved actions via the Actuator.
+    imports:
+      from __future__ import annotations
+      import hashlib
+      import logging
+      from datetime import datetime
+      from typing import Any, Dict
+      from shared.schemas import PipelineState, ChangeConfirmation
+      from executor.idempotency import get_existing_change, store_change
+      from executor.action_runner import call_actuator
+      from executor.audit_log import write_audit
+    functions:
+      async def executor_node(state: Dict[str, Any]) -> Dict[str, Any]:
+
+  PATH: agentic-ai/services/ai-agent/executor/action_runner.py
+  PURPOSE: httpx wrapper that POSTs the selected action to the corresponding actuator endpoint.
+    lines: 26
+    module docstring: Call actuator service endpoints to apply actions.
+    imports:
+      from __future__ import annotations
+      import os
+      import httpx
+      from typing import Dict, Any
+    functions:
+      async def call_actuator(action: Dict[str, Any]) -> Dict[str, Any]:
+
+  PATH: agentic-ai/services/ai-agent/executor/idempotency.py
+  PURPOSE: Redis-backed idempotency guard keyed on incident_id, so a re-run of the same incident doesn't double-apply a change.
+    lines: 21
+    module docstring: Redis-based idempotency guard for executor.
+    imports:
+      from __future__ import annotations
+      from typing import Optional
+      import os
+      import json
+      from shared.redis_client import get_value, set_value
+    functions:
+      async def get_existing_change(incident_id: str) -> Optional[dict]:
+      async def store_change(incident_id: str, change_record: dict, ttl_seconds: int=3600) -> None:
+
+  PATH: agentic-ai/services/ai-agent/executor/audit_log.py
+  PURPOSE: Appends one row to the PostgreSQL audit_log table per executed change.
+    lines: 22
+    module docstring: Audit log writer — append-only entries to PostgreSQL audit_log table.
+    imports:
+      from __future__ import annotations
+      import os
+      import asyncpg
+    functions:
+      async def write_audit(change_id: str, incident_id: str, action_type: str, parameters_hash: str, policy_decision: str, actor: str, pre_ref: str | None=None):
+
+  PATH: agentic-ai/services/ai-agent/executor/__init__.py
+    lines: 1
+    module docstring: Executor package for AURA-NET AI agent.
+
+==============================================================================
+AI AGENT / verifier — agentic-ai/services/ai-agent/verifier/
+==============================================================================
+
+  PATH: agentic-ai/services/ai-agent/verifier/agent.py
+  PURPOSE: Verifier LangGraph node — the pipeline's terminal node. Polls post-change KPIs, decides success/regression, triggers rollback if needed, and generates the postmortem.
+    lines: 116
+    module docstring: Verifier LangGraph node — compares pre/post KPIs, triggers rollback if needed,
+  then generates a full LLM post-incident report.
+    imports:
+      from __future__ import annotations
+      import logging
+      import os
+      from typing import Any, Dict
+      import httpx
+      from shared.schemas import PipelineState, VerificationReport
+      from verifier.kpi_monitor import poll_post_change_kpis
+      from verifier.postmortem import generate_postmortem
+      from verifier.rollback_trigger import trigger_rollback
+    functions:
+      async def verifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
+
+  PATH: agentic-ai/services/ai-agent/verifier/kpi_monitor.py
+  PURPOSE: Polls the digital twin + queries InfluxDB for a configurable number of post-change ticks, for before/after comparison.
+    lines: 37
+    module docstring: KPI monitor: poll digital-twin /metrics and query InfluxDB for post-change comparison.
+    imports:
+      from __future__ import annotations
+      import os
+      import asyncio
+      import time
+      from typing import Dict, Any, List
+      import httpx
+      from influxdb_client import InfluxDBClient
+    functions:
+      async def poll_post_change_kpis(change_id: str, target_entity: str, ticks: int, interval_s: int):
+
+  PATH: agentic-ai/services/ai-agent/verifier/rollback_trigger.py
+  PURPOSE: Calls the actuator's rollback endpoint when the Verifier detects a KPI regression.
+    lines: 18
+    module docstring: Trigger rollback via Actuator service when regression detected.
+    imports:
+      from __future__ import annotations
+      import os
+      import httpx
+    functions:
+      async def trigger_rollback(change_id: str, incident_id: str='') -> dict:
+
+  PATH: agentic-ai/services/ai-agent/verifier/postmortem.py
+  PURPOSE: Builds the LLM prompt and generates the full structured post-incident report; falls back to a deterministic template if the LLM call fails.
+    lines: 161
+    module docstring: LLM-driven post-incident report generator.
+    imports:
+      from __future__ import annotations
+      import logging
+      import os
+      from datetime import datetime, timezone
+      from typing import Any, Dict, List, Optional
+      from langchain_core.messages import HumanMessage, SystemMessage
+      from langchain_ollama import ChatOllama
+    functions:
+      def _build_prompt(incident: Dict[str, Any], rca: Optional[Dict[str, Any]], action_plan: Optional[Dict[str, Any]], change_confirmation: Dict[str, Any], kpi_before: Dict[str, Any], kpi_after: Dict[str, Any], outcome: str, rollback_triggered: bool) -> str:
+      def _fallback_report(incident: Dict[str, Any], action_plan: Optional[Dict[str, Any]], outcome: str, kpi_before: Dict[str, Any], kpi_after: Dict[str, Any], rollback_triggered: bool) -> str:
+      async def generate_postmortem(incident: Dict[str, Any], rca: Optional[Dict[str, Any]], action_plan: Optional[Dict[str, Any]], change_confirmation: Dict[str, Any], kpi_before: Dict[str, Any], kpi_after: Dict[str, Any], outcome: str, rollback_triggered: bool) -> str:  -- Generate full post-incident report via LLM. Falls back to template on failure.
+
+  PATH: agentic-ai/services/ai-agent/verifier/__init__.py
+    lines: 1
+    module docstring: Verifier package for AURA-NET AI agent.
+
+==============================================================================
+TESTS — tests/
+==============================================================================
+
+  PATH: agentic-ai/tests/unit/test_triage_classifier.py
+  PURPOSE: Pure unit tests for triage/classifier.py — no LLM/HTTP/Kafka.
+    lines: 127
+    module docstring: agentic-ai/tests/unit/test_triage_classifier.py
+  -------------------------------------
+  Unit tests for triage/classifier.py.
+  No LLM calls, no HTTP calls, no Kafka — pure logic.
+    imports:
+      from __future__ import annotations
+      from datetime import datetime
+      import pytest
+      from triage.classifier import classify_from_event, classify_from_kpis, compute_severity
+      from shared.schemas import IncidentType, KPISnapshot, NetworkEvent, Severity
+    classes:
+      class TestClassifyFromEvent:
+        def test_congestion(self):
+        def test_outage(self):
+        def test_backhaul_degradation(self):
+        def test_ho_failure_maps_to_mobility_storm(self):
+        def test_unknown_event_type(self):
+        def test_case_insensitive(self):
+      class TestClassifyFromKPIs:
+        def test_shutdown_returns_outage(self):
+        def test_high_prb_returns_congestion(self):
+        def test_high_latency_low_prb_returns_backhaul(self):
+        def test_high_ho_fail_returns_mobility_storm(self):
+        def test_normal_kpis_return_unknown(self):
+        def test_empty_returns_unknown(self):
+      class TestComputeSeverity:
+        def test_outage_is_critical(self):
+        def test_hint_critical_overrides(self):
+        def test_many_sla_violations_raise_severity(self):
+        def test_congestion_without_sla_is_high(self):
+    functions:
+      def _make_event(event_type: str, severity_hint: str='unknown') -> NetworkEvent:
+      def _make_kpi(entity_id: str='cell-01', prb: float=50.0, latency: float=20.0, ho_fail: float=0.01, energy_mode: str='ACTIVE', sla_violation: bool=False) -> KPISnapshot:
+
+  PATH: agentic-ai/tests/unit/test_root_cause.py
+  PURPOSE: Pure unit tests for correlator.py + hypothesis_tree.py — no LLM/HTTP/Kafka.
+    lines: 152
+    module docstring: agentic-ai/tests/unit/test_root_cause.py
+  ------------------------------
+  Unit tests for root_cause/correlator.py and root_cause/hypothesis_tree.py.
+  No LLM, no HTTP, no Kafka.
+    imports:
+      from __future__ import annotations
+      from datetime import datetime
+      from typing import Dict, List
+      import pytest
+      from root_cause.correlator import detect_pattern
+      from root_cause.hypothesis_tree import build_hypothesis_tree
+      from shared.schemas import IncidentType, KPISnapshot
+    classes:
+      class TestDetectPattern:
+        def test_congestion_pattern(self):
+        def test_backhaul_pattern(self):
+        def test_mobility_storm_pattern(self):
+        def test_empty_kpis(self):
+      class TestBuildHypothesisTree:
+        def test_congestion_produces_h1(self):
+        def test_backhaul_produces_h2(self):
+        def test_energy_saving_failure_detected(self):
+        def test_empty_pattern_returns_unknown_hypothesis(self):
+        def test_hypotheses_sorted_by_confidence(self):
+    functions:
+      def _snap(entity_id: str, prb: float=50.0, latency: float=20.0, ho_fail: float=0.01, energy_mode: str='ACTIVE', sla_violation: bool=False, sinr_db: float=15.0, packet_loss: float=0.1) -> KPISnapshot:
+
+  PATH: agentic-ai/tests/scenario-tests/fault_injection/evening_congestion.py
+  PURPOSE: End-to-end scenario test: injects peak load on 3 adjacent cells and asserts the full agent pipeline resolves the incident inside the MTTR<5min target.
+    lines: 9
+    module docstring: Scenario test: Evening Congestion
+  Ticket: AN-TST-001
+
+  Injects peak load into 3 adjacent cells and validates that the agent
+  pipeline resolves the incident within MTTR < 5 minutes.
+
+==============================================================================
+ROOT-LEVEL ADHOC SCRIPTS
+==============================================================================
+
+  PATH: .run_ai_agent_test.py
+  PURPOSE: Ad hoc manual test script (root of repo, not under tests/) — polls the AI agent service directly with `requests`.
+    lines: 24
+    imports:
+      import time
+      import requests
+
+  PATH: tmp_ai_run_test.py
+  PURPOSE: Ad hoc manual test script (root of repo, not under tests/) — same pattern as .run_ai_agent_test.py.
+    lines: 13
+    imports:
+      import requests
+
+================================================================================
+FRONTEND — agentic-ai/ui/dashboard/react-app/src/
+================================================================================
+This is the AGENTIC-AI dashboard. The digital twin has its own, unrelated UI —
+see the TWIN CONSOLE section. Different stack, container, port and design.
+
+Stack: Vite 5.4 + React 18.3 + TypeScript 5.5 + Tailwind 3.4 + Tremor 3.18 +
+TanStack Query 5.56 + lucide-react. Entry: main.tsx -> App.tsx.
+Read directly (not AST-extracted; TS files are small enough to hand-summarize).
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/main.tsx
+  PURPOSE: App bootstrap. Creates a TanStack QueryClient (retry:1,
+    refetchOnWindowFocus:false) and renders <App/> inside StrictMode +
+    QueryClientProvider.
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/App.tsx
+  PURPOSE: Top-level shell. Holds `activePage` and `isDark` state, maps page
+    names to components (Dashboard/DigitalTwin/AIAgent/Actuator) in a PAGES
+    record, toggles a `dark` class on <html> for Tailwind dark mode, renders
+    <Header/> + the active page.
+  exports: default function App()
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/config.ts
+  PURPOSE: Central API base paths + poll intervals.
+  exports:
+    const TWIN_BASE  = '/api/twin'
+    const ACT_BASE   = '/api/act'
+    const AGENT_BASE = '/api/agent'
+    const POLL_FAST  = 5_000   // ms, KPI refresh
+    const POLL_SLOW  = 30_000  // ms, health checks
+  NOTE: these are relative paths, not absolute service URLs — see ROUTING
+    section below for how /api/twin|act|agent actually resolve to a backend.
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/components/Header.tsx
+  PURPOSE: Top nav bar. Polls twin/actuator/agent /health on POLL_SLOW via
+    useQuery and renders a status dot per service, an ORION SVG logo, a
+    Grafana external link, dark-mode toggle button, and the 4-page nav.
+  functions:
+    function Dot({ ok }: { ok: boolean | undefined })  -- colored status dot
+    export default function Header({ active, onNav, isDark, onToggleDark })
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/api/digitalTwin.ts
+  PURPOSE: Typed fetch client for the digital-twin service (via TWIN_BASE).
+  interfaces: CellKPI, TwinHealth, NetworkEvent
+  exports: const twinApi = {
+    health(), metrics(), cellMetrics(cellId, lastN=20), events(limit=50),
+    snapshot(), injectFault(scenario, params), restoreFault(scenario, params),
+    injectAgentFault(scenario='evening_congestion', cells?),
+    applySlicePolicy(sliceId, minBw?, maxBw?, priority?),
+    tuneHandover(cellId, a3Offset?, tttMs?),
+    enableEnergySaving(cellId, mode), rollback(changeId)
+  }
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/api/actuator.ts
+  PURPOSE: Typed fetch client for the actuator service (via ACT_BASE).
+  exports: const actuatorApi = {
+    health(), rollback(incidentId, changeId),
+    applySlicePolicy(incidentId, sliceId, minBw?, maxBw?, priority?),
+    tuneHandover(incidentId, cellId, a3Offset?, tttMs?),
+    enableEnergySaving(incidentId, cellId, mode)
+  }
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/api/aiAgent.ts
+  PURPOSE: Typed fetch client for the ai-agent service (via AGENT_BASE).
+  interfaces: PendingApproval, AgentEvent
+  exports: const agentApi = {
+    health(), memory(entityId='C00', n=10), runPipeline(event: AgentEvent),
+    approveDecision(incidentId, decision: 'approved'|'rejected', approver),
+    pendingApprovals()
+  }
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/pages/Dashboard.tsx  (458 lines — largest page)
+  PURPOSE: Main landing page. Service health cards, per-cell multi-line KPI
+    sparklines built client-side from polled /metrics history, recent events
+    feed.
+  local helpers: fmt(), prbTextColor(), prbBarColor(), energyBadge(),
+    ServiceCard(), StatCard(), MultiLineSparkline(), Sparkline(),
+    CellLegend(), emptyHist(), maxOfRecord()
+  export default function Dashboard() — polls twin.health/metrics/events
+    (POLL_FAST/POLL_SLOW), actuator.health, agent.health via useQuery; keeps
+    a rolling client-side KPI history in useState for the sparklines.
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/pages/DigitalTwin.tsx  (446 lines)
+  PURPOSE: Per-cell KPI history + all digital-twin control surfaces: fault
+    inject/restore (incl. agent-clearable variant), handover tuning
+    (a3Offset/tttMs), energy mode, slice policy.
+  local helpers: faultParams(), restoreParams(), fmt(), ActionResult()
+  export default function DigitalTwin() — one useQuery per data source
+    (health, metrics, selected-cell metrics, events) and one useMutation per
+    control action (faultMut, restoreMut, agentFaultMut, hoMut, emMut, spMut),
+    each with its own local result/error state.
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/pages/AIAgent.tsx  (381 lines)
+  PURPOSE: Fault-scenario trigger UI + the live Pending Approvals panel
+    (polls agentApi.pendingApprovals) with one-click approve/reject, plus a
+    memory-store inspector and a visual pipeline-stage progress bar for the
+    last run.
+  local helpers: JsonBox(), PipelineStageBar(), ApprovalCard()
+  export default function AIAgent() — health/pending/memory useQuery,
+    approvalMut/injectMut useMutation.
+
+  PATH: agentic-ai/ui/dashboard/react-app/src/pages/Actuator.tsx  (316 lines)
+  PURPOSE: Manual actuator controls mirroring what the agent pipeline can do
+    (rollback, slice policy, handover tuning, energy mode) plus an audit-
+    trail-adjacent snapshot view, for direct operator override without going
+    through the AI pipeline.
+  local helpers: ActionResult()
+  export default function Actuator() — health/metrics/snapshot useQuery,
+    one useMutation per control action (rbMut, twinRbMut, spMut, hoMut, emMut).
+
+================================================================================
+ROUTING — how a browser request actually reaches a backend service
+================================================================================
+TWO SEPARATE ROUTING SETUPS, one per stack. The Twin Console's is described
+first because it is the simpler and newer of the two; the agentic-ai dashboard's
+follows.
+
+--- digital-twin/ui (Twin Console) — host 8080 ---
+The browser only ever talks same-origin. Both dev and container use the same
+paths, so nothing in the app code branches on environment:
+
+  DEV (vite dev server, `npm run dev` / `make ui-dev`, port 5173):
+      /api/twin/*   -> TWIN_TARGET    (default localhost:8001), ws:true
+      /grafana/*    -> GRAFANA_TARGET (default localhost:3001)
+
+  DOCKER / PROD (digital-twin/ui/nginx.conf, container port 80 -> host 8080):
+      location /            -> try_files, SPA fallback to /index.html
+      location /api/twin/   -> digital-twin:8001/  (REST *and* the
+                                /ws/telemetry WebSocket — the Upgrade /
+                                Connection headers plus the http-scope
+                                `map $http_upgrade $connection_upgrade` are
+                                what make the upgrade survive the proxy)
+      location /grafana/    -> grafana:3000  (JSON API only, see below)
+      location = /healthz   -> 200, compose healthcheck target
+
+  Grafana is the one thing NOT reached same-origin: the d-solo/kiosk iframes
+  load from Grafana's own published origin (default <host>:3001, overridable
+  via the VITE_GRAFANA_URL build arg or a per-browser localStorage setting).
+  Only the Analytics page's dashboard-panel-list FETCH goes through the
+  /grafana/ nginx proxy, because Grafana emits no CORS headers and the
+  browser blocks that call cross-origin. Doing it this way avoids setting
+  GF_SERVER_ROOT_URL + GF_SERVER_SERVE_FROM_SUB_PATH, which would have moved
+  Grafana off its own root and broken direct access on :3001.
+
+  GOTCHA (already fixed, do not reintroduce): the compose healthcheck must
+  use http://127.0.0.1/healthz, not http://localhost/healthz. nginx binds
+  IPv4 only; inside the container `localhost` resolves to ::1 first and the
+  connection is refused, so the container serves traffic fine while reporting
+  unhealthy.
+
+--- agentic-ai/ui/dashboard/react-app — host 80 via its own nginx ---
+The dashboard NEVER calls TWIN_TARGET/ACT_TARGET/AGENT_TARGET directly from
+the browser. Those docker-compose env vars are consumed server-side:
+
+  DEV (vite dev server, `npm run dev`):
+    vite.config.ts reads TWIN_TARGET/ACT_TARGET/AGENT_TARGET (falling back to
+    localhost:8001/8003/8004) and proxies:
+      /api/twin/*  -> TWIN_TARGET/*
+      /api/act/*   -> ACT_TARGET/*
+      /api/agent/* -> AGENT_TARGET/*
+
+  DOCKER / PROD (agentic-ai/ui/nginx/nginx.conf, port 80) — CURRENT STATE,
+  post-separation:
+      location /              -> react-app:3000            (the SPA itself)
+      location /grafana/      -> COMMENTED OUT — grafana now lives in the
+                                  digital-twin stack, not on this network
+      location /api/          -> api-gateway:8000/          (generic catch-all)
+      location /api/twin/     -> COMMENTED OUT — same reason as /grafana/;
+                                  a live static proxy_pass to a hostname that
+                                  doesn't resolve would stop nginx starting,
+                                  so it's disabled rather than left dangling
+      location /api/act/      -> actuator:8003/             (more specific, wins)
+      location /api/agent/    -> ai-agent:8003/              (more specific, wins;
+                                  8003 is the container's INTERNAL port — see
+                                  docker-compose "8004:8003" port mapping)
+
+  Net effect: nginx's more-specific /api/act|agent/ locations shadow the
+  generic /api/ -> api-gateway location for every request the dashboard
+  actually makes. The api-gateway container receives essentially no live
+  traffic. This matches agentic-ai/services/api-gateway being an unimplemented stub
+  (see API GATEWAY section above) — the routing config was future-proofed for
+  a gateway that was never finished, not left in place by mistake.
+  /api/twin/ and /grafana/ being disabled is a SEPARATE, newer issue — see
+  the SEPARATION note in PROJECT OVERVIEW — and needs re-enabling once
+  digital-twin and agentic-ai are networked together.
+
+================================================================================
+CONFIG & INFRASTRUCTURE
+================================================================================
+Two independent docker-compose projects now — see the SEPARATION note in
+PROJECT OVERVIEW for why and what it broke. Each has its own
+docker-compose.yml, docker-compose.override.yml (both now correctly placed
+next to their docker-compose.yml, so both auto-load on plain `docker compose
+up` — the old infra/docker-compose.override.yml never actually applied
+since it lived one directory level away from where compose auto-discovers
+it), .env.example, and Makefile.
+
+--- digital-twin/docker-compose.yml — 6 services on bridge network `twin` ---
+  zookeeper, kafka (host 9093 -> container 9092, shifted to avoid colliding
+    with agentic-ai's own kafka on 9092 if both stacks run at once),
+  influxdb (:18086->8086), grafana (:3001->3000), digital-twin (:8001,
+    volume ./data/csv:/data/csv — DATASET_DIR default now matches the mount
+    target; the pre-separation compose had these mismatched, ./data/csv was
+    mounted to /data/telecom while DATASET_DIR defaulted to /data/csv, so
+    auto-discovery silently found nothing — fixed as part of this split),
+  twin-ui (2026-09-05: the Twin Console — build context ./ui, build arg
+    VITE_GRAFANA_URL=${TWIN_UI_GRAFANA_URL:-}, published on
+    ${TWIN_UI_PORT:-8080}->80, depends_on digital-twin: service_healthy,
+    healthcheck wget http://127.0.0.1/healthz — 127.0.0.1 not localhost, see
+    the GOTCHA in the ROUTING section)
+  grafana's datasource provisioning (grafana/provisioning/datasources/
+  influxdb.yml) also had two bugs, fixed in a later pass: it hardcoded
+  organization/defaultBucket to values ("aura-net-lab"/"aura_net_lab") that
+  never matched the real INFLUXDB_ORG/INFLUXDB_BUCKET, and used ${VAR} for
+  the token instead of Grafana's own $__env{VAR} provisioning syntax — so
+  dashboards would have shown no data. Now uses $__env{INFLUXDB_ORG},
+  $__env{INFLUXDB_BUCKET}, $__env{INFLUXDB_TOKEN}, and docker-compose.yml's
+  grafana service passes INFLUXDB_ORG/INFLUXDB_BUCKET into the container so
+  those resolve. It also now sets a fixed `uid: influxdb` (previously
+  auto-generated) so dashboards can reference the datasource reliably.
+
+  The grafana service also gained three env vars on 2026-09-05 so the Twin
+  Console's Analytics page can iframe its panels:
+    GF_SECURITY_ALLOW_EMBEDDING=true   (without it the browser refuses the
+                                        frame and the page shows empty boxes)
+    GF_AUTH_ANONYMOUS_ENABLED=true     (without it every embed bounces to a
+                                        login form)
+    GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer  (read-only; GF_SECURITY_ADMIN_PASSWORD
+                                        still guards editing)
+  Anonymous access is also what makes /api/dashboards/uid/<uid> readable, which
+  is how the Analytics page discovers the panel list at runtime.
+
+  KNOWN COSMETIC ISSUE in cell_kpi_overview.json, reported but deliberately
+  NOT changed (it is a dashboard-owner decision, and it renders identically in
+  Grafana directly — it is not an artefact of the embedding): all 8 timeseries
+  panels set fieldConfig.defaults.custom.fillOpacity = 10, and with 12 series
+  per panel the fills stack into a solid band that swallows the lines. Setting
+  it to 0 fixes it. Separately, the Cell Status table panel renders only C00
+  rather than all 12 cells.
+
+  grafana/provisioning/dashboards/ did not exist before and was added in a
+  later pass, since Grafana was otherwise a wired-up empty shell (datasource
+  only, zero dashboards). dashboards.yml is the file-provider config (polls
+  every 30s, loads into a "Digital Twin" folder). cell_kpi_overview.json is
+  one dashboard built against the actual `cell_kpi` measurement written by
+  main.py's _write_to_influx (tags: cell_id, energy_mode; fields: prb_util,
+  throughput_mbps, sinr_db, cqi, latency_p95_ms, packet_loss_pct,
+  cpu_load_pct, ho_fail_rate, sla_violation, is_peak): a multi-select Cell
+  template variable driven by a live tagValues() query, 3 aggregate stat
+  panels (Active Cells, Avg PRB Utilization, SLA Violation Rate — the
+  latter two pipe through Flux `|> group() |> mean()` to collapse all
+  per-cell series into one number instead of a tiny unreadable per-cell
+  grid), 8 per-KPI time series panels, and a cell-status table.
+
+digital-twin/.env.example — key variables:
+  INFLUXDB_URL/TOKEN/ORG/BUCKET/PASSWORD, KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    (container-internal, unaffected by the host port shift above),
+  GRAFANA_PASSWORD, TICK_INTERVAL_S=5, SIM_START_TIME (optional HH:MM anchor),
+  TWIN_UI_PORT=8080 and TWIN_UI_GRAFANA_URL (blank = the console falls back to
+    <current browser host>:3001; set it when the stack runs on another machine),
+  DATASET_CSV_PATH / DATASET_SOURCES / DATASET_DIR (see dataset_loader.py),
+  AGENT_URL (commented out — cross-stack, not wired up, see SEPARATION note)
+
+digital-twin/Makefile: up / down / logs / seed / ui-install / ui-dev / ui-build
+  ui-dev runs the Vite dev server against a stack that is already up; ui-build
+  runs `tsc --noEmit && vite build`. Both npm-install first.
+  make seed -> docker compose exec digital-twin python dataset_loader.py
+    (dataset_loader.py gained an `if __name__ == "__main__": DatasetLoader()`
+    guard in a later pass — before that, this target ran the script with no
+    main block and did nothing at all. Now it actually instantiates the
+    loader, which logs the real-vs-synthetic source summary per cell, so you
+    can validate DATASET_DIR/DATASET_SOURCES before booting the full stack.)
+
+--- agentic-ai/docker-compose.yml — 10 services on bridge network `agentic` ---
+  zookeeper, kafka (:9092), redis (:6379), postgres, prometheus (:9090),
+  collector (:8002), actuator (:8003), api-gateway (:8000),
+  ai-agent (:8004->8003), react-app (:3000), nginx (:80, depends_on
+    react-app/api-gateway — grafana dropped from depends_on, it's no longer
+    in this stack)
+  No influxdb here — nothing in agentic-ai reads/writes it (collector's
+  query_metrics.py is still a stub), so it wasn't duplicated from
+  digital-twin.
+  ai-agent gets `extra_hosts: host.docker.internal:host-gateway` (Linux) to
+  reach Ollama running on the HOST, plus explicit
+  OLLAMA_BASE_URL=http://host.docker.internal:11434. Its TWIN_URL and
+  react-app's TWIN_TARGET both still say http://digital-twin:8001 — a
+  placeholder that won't resolve until the stacks are networked together
+  (see SEPARATION note).
+  react-app gets NODE_ENV=development + the three *_TARGET vars used by
+  vite's dev-server proxy (see ROUTING above) — meaning the "production"
+  container build still runs vite's dev server, not a static build.
+
+agentic-ai/.env.example — key variables:
+  ANTHROPIC_API_KEY          present but NOT referenced by any
+                              langchain_anthropic import found in the
+                              codebase scan — the LLM path in code is
+                              exclusively langchain_ollama/ChatOllama; treat
+                              this var as unused/vestigial unless you find a
+                              call site.
+  POSTGRES_URL/DB/USER/PASSWORD
+  KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+  REDIS_URL=redis://redis:6379/0
+  JWT_SECRET                 present but unused (api-gateway/auth.py is a stub)
+  TWIN_URL                   placeholder, see SEPARATION note
+  OLLAMA_BASE_URL, OLLAMA_MODEL=llama3.3
+
+agentic-ai/Makefile: up / down / logs / test
+  make test -> docker compose run --rm ai-agent pytest tests/ (this now
+    actually works — docker-compose.override.yml mounts ./tests:/app/tests
+    into the ai-agent container; pre-separation this target had no path to
+    the tests/ directory inside the container at all since the override
+    that would have provided it was never auto-loaded)
+
+Per-service Python dependency highlights (see each service's requirements.txt
+for exact pins):
+  ai-agent:      langgraph 1.1.10, langchain 1.2.18, langchain-core 1.3.3,
+                 langchain-ollama, fastapi, uvicorn, aiokafka, redis,
+                 asyncpg, influxdb-client, pydantic 2.11
+  digital-twin:  fastapi, uvicorn, simpy 4.1.1, influxdb-client,
+                 pydantic 2.7, numpy, pandas, kafka-python,
+                 websockets 12.0 (added 2026-09-05 — uvicorn needs it to
+                 serve /ws/telemetry. Verified behaviour when it is missing:
+                 the route is registered but every upgrade request returns
+                 HTTP 404, and uvicorn logs "Unsupported upgrade request."
+                 followed by "No supported WebSocket library detected." —
+                 grep those strings if the console reports REST POLL instead
+                 of WS LIVE)
+                 (aiokafka and python-dotenv removed in a later pass — both
+                 were unused; the code publishes via the sync kafka-python
+                 client and reads env vars directly via os.getenv, never
+                 aiokafka or load_dotenv)
+  (actuator/collector/api-gateway requirements not re-scanned here — check
+  agentic-ai/services/<name>/requirements.txt directly if adding dependencies.)
+
+Frontend package.json (digital-twin/ui — the Twin Console):
+  deps: @tanstack/react-query 5.59, echarts 5.5, lucide-react 0.446,
+        react/react-dom 18.3, react-router-dom 6.26
+  dev:  vite 5.4, typescript 5.6, tailwindcss 3.4, @vitejs/plugin-react 4.3,
+        postcss, autoprefixer
+  scripts: dev / build (`tsc --noEmit && vite build`) / preview / typecheck
+  package-lock.json IS committed — the Dockerfile uses `npm ci`.
+
+Frontend package.json (agentic-ai/ui/dashboard/react-app):
+  deps: @tanstack/react-query 5.56, @tremor/react 3.18, lucide-react 0.441,
+        react/react-dom 18.3
+  devDeps: typescript 5.5, vite 5.4, tailwindcss 3.4, @vitejs/plugin-react 4.3
+  scripts: dev (vite), build (tsc && vite build), preview
+
+================================================================================
+KNOWN STUB / TODO FILES (verified by AST scan — module body is a docstring
++ "TODO: AN-XXX-###" only, no classes/functions)
+================================================================================
+  digital-twin/topology.py           (AN-TWN-001)
+  agentic-ai/services/collector/http_ingestor.py         (AN-COL-001)
+  agentic-ai/services/collector/kafka_consumer.py        (AN-COL-001)
+  agentic-ai/services/collector/mqtt_ingestor.py         (AN-COL-001)
+  agentic-ai/services/collector/query_metrics.py         (AN-COL-001)
+  agentic-ai/services/actuator/change_record.py          (AN-ACT-001)
+  agentic-ai/services/actuator/energy_mode.py            (AN-ACT-001)
+  agentic-ai/services/actuator/handover_tuner.py         (AN-ACT-001)
+  agentic-ai/services/actuator/rollback.py               (AN-ACT-001)
+  agentic-ai/services/actuator/slice_policy.py           (AN-ACT-001)
+  agentic-ai/services/api-gateway/auth.py                (AN-GWY-001)
+  agentic-ai/services/api-gateway/rbac.py                 (AN-GWY-001)
+  agentic-ai/services/api-gateway/routes.py              (AN-GWY-001)
+  agentic-ai/services/ai-agent/orchestrator/handoff.py   (superseded by graph.py)
+
+For every stub above except digital-twin/topology.py and orchestrator/
+handoff.py, the working implementation actually lives inline in that
+service's main.py — the stub files read as scaffolding for a
+never-completed per-concern split, not as missing functionality. Only the
+API gateway's auth/rbac/routes stubs correspond to genuinely-missing
+functionality (no auth or RBAC exists anywhere in this stack).
+
+================================================================================
+SAFETY RULES QUICK REFERENCE (agentic-ai/services/ai-agent/safety/policy_engine.py)
+================================================================================
+  POL-001  energy-saving sets SLEEP/SHUTDOWN during 08:00-22:00 UTC -> DENY
+  POL-002  blast_radius > 10 cells                                 -> approval
+  POL-003  > 3 changes in trailing 10 minutes                      -> approval
+  POL-004  whatif confidence < 60% AND blast_radius > 3             -> approval
+  POL-005  action_type == "rollback"                                -> ALLOW
+  POL-006  severity == critical AND action == apply_slice_policy    -> ALLOW
+  blast radius heuristic (safety/blast_radius.py):
+    apply_slice_policy -> 12, enable_energy_saving -> 6,
+    tune_handover -> 3, else -> 1
+
+================================================================================
+END OF DOCUMENT
+================================================================================

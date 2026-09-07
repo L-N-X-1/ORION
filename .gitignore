@@ -26,8 +26,8 @@ data/volumes/
 .DS_Store
 Thumbs.db
 
-data/csv/*.csv
-data/**/*.csv
+digital-twin/data/csv/*.csv
+digital-twin/data/**/*.csv
 # Added by code-review-graph
 .code-review-graph/
 

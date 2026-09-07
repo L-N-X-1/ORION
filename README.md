@@ -1,7 +1,7 @@
 # ORION 🛰️
 
 <p align="center">
-  <img src="docs/orion_logo.png" alt="ORION logo" width="480"/>
+  <img src="agentic-ai/docs/orion_logo.png" alt="ORION logo" width="480"/>
 </p>
 
 > Operational RAN Intelligence & Optimization Network
@@ -24,9 +24,21 @@ An autonomous AI-powered Network Operations Center (NOC) for 5G/6G infrastructur
 
 ## Architecture
 
+> **Repo layout:** ORION is two independent stacks, each with its own
+> `docker-compose.yml` — [`digital-twin/`](digital-twin/) (the RAN simulator)
+> and [`agentic-ai/`](agentic-ai/) (the LangGraph pipeline, actuator,
+> collector, api-gateway, and dashboard). They are not networked together
+> yet — that correlation (letting agentic-ai reach the twin's REST API and
+> Kafka events) is a deliberate follow-up, not done in this pass. Each stack
+> runs and is developed on its own until then.
+
 <p align="center">
-  <img src="docs/architecture.png" alt="ORION architecture diagram" width="860"/>
+  <img src="agentic-ai/docs/architecture.png" alt="ORION architecture diagram" width="860"/>
 </p>
+
+*(diagram predates the digital-twin/agentic-ai split above and still shows
+them as one connected stack — accurate for the logical data flow, not for
+the current physical repo/deployment layout.)*
 
 ### Agent Pipeline
 
@@ -63,45 +75,67 @@ All decisions that affect the network are backed by deterministic guardrails —
 
 ## Quick Start
 
+ORION is two separate stacks now. Bring up whichever one(s) you need —
+they don't depend on each other to start.
+
 ```bash
 git clone https://github.com/L-N-X-1/ORION.git
 cd ORION
-docker compose up -d
+
+# Digital twin (RAN simulator + its own Kafka/InfluxDB/Grafana)
+cd digital-twin && make up && cd ..
+
+# Agentic AI (LangGraph pipeline + actuator/collector/api-gateway + dashboard)
+cd agentic-ai && make up && cd ..
 ```
 
 > Ollama must be running on the host with a model pulled (default: `llama3.2`).
-> Override with `OLLAMA_MODEL=llama3.2:3b` in `.env` for faster inference.
+> Override with `OLLAMA_MODEL=llama3.2:3b` in `agentic-ai/.env` for faster inference.
 
-Services:
+Digital twin stack:
+
+| Service       | URL                    |
+|---------------|------------------------|
+| Digital Twin  | http://localhost:8001  |
+| Grafana       | http://localhost:3001  |
+| InfluxDB      | http://localhost:18086 |
+
+Agentic AI stack:
 
 | Service       | URL                    |
 |---------------|------------------------|
 | Dashboard     | http://localhost:3000  |
 | API Gateway   | http://localhost:8000  |
-| Grafana       | http://localhost:3001  |
-| Digital Twin  | http://localhost:8001  |
 | AI Agent      | http://localhost:8004  |
 | Prometheus    | http://localhost:9090  |
-| InfluxDB      | http://localhost:18086 |
+
+The dashboard's Digital Twin controls and `/api/twin/*` routes are currently
+non-functional in isolation — they call the twin service, which isn't on the
+agentic-ai docker network. See the correlation note above.
 
 ---
 
 ## Web Dashboard
 
-Open `http://localhost:3000` after `docker compose up -d`.
+Open `http://localhost:3000` after `cd agentic-ai && make up`.
 
 | Page | Description |
 |---|---|
 | **Dashboard** | Per-cell multi-line KPI sparklines (PRB, Throughput, Latency, SINR, HO Fail, Packet Loss, SLA), live service health cards, recent events feed. Dark mode toggle (🌙/☀️) in header. |
-| **Digital Twin** | Per-cell KPI history, fault injection & restore, handover tuning, energy mode, slice policy controls. |
+| **Digital Twin** | Per-cell KPI history, fault injection & restore, handover tuning, energy mode, slice policy controls. **Currently non-functional** — this page calls the twin service directly, which isn't reachable from the agentic-ai stack until the two are networked together. |
 | **AI Agent** | Inject fault scenarios to trigger the LangGraph pipeline. **Pending Approvals** panel polls the agent every 5 s and shows any pipeline suspended at the Human Approval gate with one-click Approve / Reject. |
 | **Actuator** | Manual rollback, slice policy, handover, and energy mode controls with audit trail. |
 
-Grafana dashboards: `http://localhost:3001`
+Grafana dashboards (twin KPIs, part of the digital-twin stack): `http://localhost:3001` after `cd digital-twin && make up`.
 
 ---
 
 ## Triggering the Closed Loop
+
+> These examples assume the digital-twin and agentic-ai stacks are
+> networked together so the twin's fault-injection can reach the agent
+> pipeline (see the correlation note in Architecture above) — they won't
+> work end-to-end against two isolated stacks yet.
 
 ### Ephemeral fault injection (recommended)
 
@@ -150,9 +184,11 @@ A `202 awaiting_approval` response means the pipeline paused at the human approv
 
 ## Digital Twin — Getting Started
 
+Everything below applies to the standalone `digital-twin/` stack (`cd digital-twin && make up`) — it doesn't require agentic-ai running.
+
 ### 1. Download the Dataset
 
-Download the Milan mobile phone activity dataset from Kaggle and place the CSV files under `/data/csv/`:
+Download the Milan mobile phone activity dataset from Kaggle and place the CSV files under `digital-twin/data/csv/`:
 
 ```
 https://www.kaggle.com/datasets/marcodena/mobile-phone-activity
@@ -162,9 +198,9 @@ Expected directory structure:
 
 ```
 orion/
-└── data/
-    └── csv/
-    └── telecom/
+└── digital-twin/
+    └── data/
+        └── csv/
 ```
 
 ### 2. Supported CSV Format
@@ -187,7 +223,7 @@ Any CSV that follows this column structure is accepted — the loader is not har
 
 | Mode | Description |
 |------|-------------|
-| **Auto-assign** | Load all CSVs from `/data/csv/` and distribute rows across cells automatically. |
+| **Auto-assign** | Load all CSVs from `digital-twin/data/csv/` and distribute rows across cells automatically. |
 | **Dedicated-cell** | Explicitly bind each CSV (and a row filter) to a named cell. Better spatial fidelity. |
 
 ### 4. Configure `DATASET_SOURCES`
