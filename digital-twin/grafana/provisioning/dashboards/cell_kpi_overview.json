@@ -1,0 +1,266 @@
+{
+  "id": null,
+  "uid": "digital-twin-cell-kpi",
+  "title": "Digital Twin - Cell KPI Overview",
+  "description": "Live KPIs streamed from the digital-twin simulation into InfluxDB (measurement: cell_kpi).",
+  "tags": ["digital-twin", "aura-net"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "cell_id",
+        "type": "query",
+        "label": "Cell",
+        "datasource": { "type": "influxdb", "uid": "influxdb" },
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: v.defaultBucket, tag: \"cell_id\")",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "hide": 0,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Active Cells",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: v.defaultBucket, tag: \"cell_id\")\n  |> count()"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "graphMode": "none" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Avg PRB Utilization",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"prb_util\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> group()\n  |> mean()"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "graphMode": "area" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "SLA Violation Rate",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"sla_violation\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> group()\n  |> mean()\n  |> map(fn: (r) => ({ r with _value: r._value * 100.0 }))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 15 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "graphMode": "area" }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Throughput (Mbps)",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"throughput_mbps\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"throughput_mbps\")"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Mbits", "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "PRB Utilization (%)",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"prb_util\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"prb_util\")"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "min": 0,
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "SINR (dB)",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"sinr_db\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"sinr_db\")"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "dB", "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "min", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "CQI",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"cqi\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"cqi\")"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none", "min": 0, "max": 15, "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "min", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Latency p95 (ms)",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"latency_p95_ms\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"latency_p95_ms\")"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Packet Loss (%)",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"packet_loss_pct\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"packet_loss_pct\")"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "CPU Load (%)",
+      "gridPos": { "x": 0, "y": 28, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"cpu_load_pct\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"cpu_load_pct\")"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "min": 0,
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Handover Failure Rate",
+      "gridPos": { "x": 12, "y": 28, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"ho_fail_rate\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"ho_fail_rate\")"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true },
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.02 }, { "color": "red", "value": 0.05 }] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Cell Status (latest, energy mode)",
+      "gridPos": { "x": 0, "y": 36, "w": 24, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: -10m)\n  |> filter(fn: (r) => r._measurement == \"cell_kpi\" and r._field == \"prb_util\")\n  |> filter(fn: (r) => r.cell_id =~ /^${cell_id:regex}$/)\n  |> last()\n  |> keep(columns: [\"_time\", \"cell_id\", \"energy_mode\", \"_value\"])\n  |> rename(columns: {_value: \"prb_util\", _time: \"last_seen\"})\n  |> sort(columns: [\"cell_id\"])"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true }
+    }
+  ]
+}

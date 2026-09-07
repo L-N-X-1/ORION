@@ -1,0 +1,128 @@
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [twin]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      # Host port shifted from the usual 9092 -> 9093 so this stack's Kafka
+      # doesn't collide with agentic-ai's own Kafka if both stacks run at
+      # once on the same machine. Internal container port is still 9092.
+      - "9093:9092"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks: [twin]
+
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "18086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [twin]
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
+      # Lets the twin console embed Grafana panels in an iframe (Analytics page).
+      # Anonymous viewer access keeps the embeds from bouncing to a login form;
+      # the admin password above still guards editing.
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    networks: [twin]
+
+  digital-twin:
+    build: .
+    ports:
+      - "8001:8001"
+    env_file: .env
+    volumes:
+      - ./data/csv:/data/csv
+    depends_on:
+      kafka:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [twin]
+
+  twin-ui:
+    build:
+      context: ./ui
+      args:
+        # Baked into the bundle so the Analytics page knows where Grafana lives.
+        # Operators can still override it per-browser from the Analytics panel.
+        VITE_GRAFANA_URL: ${TWIN_UI_GRAFANA_URL:-}
+    ports:
+      - "${TWIN_UI_PORT:-8080}:80"
+    depends_on:
+      digital-twin:
+        condition: service_healthy
+    healthcheck:
+      # 127.0.0.1, not localhost: nginx binds IPv4 only, and inside the
+      # container localhost resolves to ::1 first, which refuses the connection.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [twin]
+
+networks:
+  twin:
+    driver: bridge
+
+volumes:
+  influxdb_data:
+  grafana_data:

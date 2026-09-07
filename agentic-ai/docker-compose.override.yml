@@ -1,0 +1,16 @@
+# Local dev override — hot reload. Auto-loaded by `docker compose up`
+# since it sits next to docker-compose.yml.
+services:
+  collector:
+    volumes:
+      - ./services/collector:/app
+  actuator:
+    volumes:
+      - ./services/actuator:/app
+  api-gateway:
+    volumes:
+      - ./services/api-gateway:/app
+  ai-agent:
+    volumes:
+      - ./services/ai-agent:/app
+      - ./tests:/app/tests

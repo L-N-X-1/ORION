@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # digital-twin's own job was removed here — it now lives in a separate
+  # docker-compose project/network and isn't reachable at this hostname.
+  # Re-add once the two stacks are networked together.
+  - job_name: collector
+    static_configs:
+      - targets: ['collector:8002']
+  - job_name: actuator
+    static_configs:
+      - targets: ['actuator:8003']
+  - job_name: api-gateway
+    static_configs:
+      - targets: ['api-gateway:8000']

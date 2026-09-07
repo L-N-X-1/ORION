@@ -1,0 +1,153 @@
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [agentic]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks: [agentic]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [agentic]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/timeseries/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [agentic]
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks: [agentic]
+
+  # ── App Services ────────────────────────────────────────────────
+  collector:
+    build: ./services/collector
+    ports:
+      - "8002:8002"
+    env_file: .env
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks: [agentic]
+
+  actuator:
+    build: ./services/actuator
+    ports:
+      - "8003:8003"
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [agentic]
+
+  api-gateway:
+    build: ./services/api-gateway
+    ports:
+      - "8000:8000"
+    env_file: .env
+    networks: [agentic]
+
+  ai-agent:
+    ports:
+      - "8004:8003"
+    build: ./services/ai-agent
+    env_file: .env
+    depends_on:
+      api-gateway:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [agentic]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # exposes host to container on Linux
+    environment:
+      - COLLECTOR_URL=http://collector:8002
+      # TWIN_URL is a placeholder — digital-twin now lives in its own
+      # docker-compose project/network and is NOT reachable at this
+      # hostname until the two stacks are connected. See the correlation
+      # TODO in the root README.
+      - TWIN_URL=http://digital-twin:8001
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+
+  react-app:
+    build: ./ui/dashboard/react-app
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      # TWIN_TARGET is a placeholder — same caveat as ai-agent's TWIN_URL
+      # above, digital-twin is not on this network yet.
+      - TWIN_TARGET=http://digital-twin:8001
+      - ACT_TARGET=http://actuator:8003
+      - AGENT_TARGET=http://ai-agent:8003
+    networks: [agentic]
+
+  nginx:
+    build: ./ui/nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - react-app
+      - api-gateway
+    networks: [agentic]
+
+networks:
+  agentic:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: #0b0a09;
+    color: #f0eae0;
+    font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Instrument-grade chassis: a faint engineering grid, no gradients. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.019) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.019) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mask-image: radial-gradient(ellipse 120% 90% at 50% 0%, #000 35%, transparent 100%);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0b0a09;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #262320;
+    border: 2px solid #0b0a09;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3b362f;
+  }
+
+  *:focus-visible {
+    outline: 1px solid #ffb01f;
+    outline-offset: 2px;
+  }
+
+  input,
+  select,
+  button,
+  textarea {
+    font-family: inherit;
+  }
+
+  /* Numbers are data — always tabular, always monospace. */
+  .num {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+}
+
+@layer components {
+  /* Section micro-label: the app's typographic signature. */
+  .label {
+    @apply font-mono text-micro uppercase text-ink3;
+  }
+
+  .panel {
+    @apply relative border border-line bg-panel;
+  }
+
+  /* Corner registration ticks — the panel reads as an instrument bezel. */
+  .panel-ticks::before,
+  .panel-ticks::after {
+    content: '';
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    pointer-events: none;
+    border-color: #3b362f;
+  }
+  .panel-ticks::before {
+    top: -1px;
+    left: -1px;
+    border-top: 1px solid;
+    border-left: 1px solid;
+    border-color: #4a443c;
+  }
+  .panel-ticks::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom: 1px solid;
+    border-right: 1px solid;
+    border-color: #4a443c;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 border border-line2 bg-raise px-3 py-1.5
+           font-mono text-[11px] uppercase tracking-[0.1em] text-ink2 transition-colors
+           hover:border-ink3 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40
+           disabled:hover:border-line2 disabled:hover:text-ink2;
+  }
+
+  .btn-primary {
+    @apply border-amber2 bg-amberwash text-amber hover:border-amber hover:text-amber;
+  }
+
+  .btn-danger {
+    @apply border-coral/40 text-coral hover:border-coral hover:text-coral;
+  }
+
+  .field {
+    @apply w-full border border-line2 bg-void px-2 py-1.5 font-mono text-[12px] text-ink
+           placeholder:text-ink3 focus:border-amber2 focus:outline-none;
+  }
+
+  .row-hover {
+    @apply transition-colors hover:bg-raise/60;
+  }
+}

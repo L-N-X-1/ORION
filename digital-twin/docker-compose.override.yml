@@ -1,0 +1,6 @@
+# Local dev override — hot reload. Auto-loaded by `docker compose up`
+# since it sits next to docker-compose.yml.
+services:
+  digital-twin:
+    volumes:
+      - .:/app
